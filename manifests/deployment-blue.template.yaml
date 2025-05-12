@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: __APP_NAME__-blue
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: __APP_NAME__
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: __APP_NAME__
+        version: blue
+    spec:
+      containers:
+      - name: app
+        image: __APP_NAME__:blue
+        env:
+        - name: APP_VERSION
+          value: "blue"
+        - name: PORT
+          value: "__TARGET_PORT__"
+        ports:
+        - containerPort: __TARGET_PORT__ 

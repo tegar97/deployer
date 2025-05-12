@@ -1,0 +1,7 @@
+ansible
+node_modules
+config.json
+deploy.sh
+deployment-blue.yaml
+deployment-green.yaml
+service.yaml
