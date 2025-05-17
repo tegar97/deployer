@@ -47,7 +47,7 @@ const allowedBranches = ['refs/heads/main', 'refs/heads/develop', 'refs/heads/re
 // Function to run deploy.sh for an app
 function deployApp(appName) {
     return new Promise((resolve, reject) => {
-        const scriptPath = 'deploy.sh';
+        const scriptPath = path.join(__dirname, 'deploy.sh');
 
         console.log(`📜 Deploying app: ${appName}`);
         
@@ -146,7 +146,7 @@ app.post('/webhook', (req, res) => {
     console.log('📝 Commits:\n', payload.commits.map(commit => '- ' + commit.message).join('\n'));
 
     if (allowedBranches.includes(ref)) {
-        const scriptPath = 'deploy.sh';
+        const scriptPath = path.join(__dirname, 'deploy.sh');
 
         console.log('📜 Script path:', scriptPath);
         if (!fs.existsSync(scriptPath)) {
