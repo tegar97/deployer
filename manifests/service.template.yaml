@@ -10,5 +10,5 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: __TARGET_PORT__
+      targetPort: __DOCKER_PORT__
       nodePort: __NODE_PORT__ 

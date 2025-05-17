@@ -11,11 +11,11 @@ echo "🚀 Working with App: $APP_NAME"
 if ! command -v jq &> /dev/null; then
     echo "⚙️ jq not found, attempting to install it..."
     if command -v apt-get &> /dev/null; then
-        apt-get update && apt-get install -y jq
+        sudo apt-get update && sudo apt-get install -y jq
     elif command -v yum &> /dev/null; then
-        yum install -y jq
+        sudo yum install -y jq
     elif command -v apk &> /dev/null; then
-        apk add --no-cache jq
+        sudo apk add --no-cache jq
     else
         echo "⚠️ Could not install jq automatically. Using fallback method for configuration."
     fi
@@ -82,37 +82,54 @@ fi
 
 echo "🔌 Using ports: TARGET_PORT=$TARGET_PORT, NODE_PORT=$NODE_PORT, DOCKER_PORT=$DOCKER_PORT"
 
+# Check if user has MicroK8s permissions, if not try with sudo
+KUBECTL_CMD="sudo microk8s kubectl"
+if ! $KUBECTL_CMD get nodes &> /dev/null; then
+    echo "⚠️ Insufficient permissions for MicroK8s. Trying with sudo..."
+    KUBECTL_CMD="sudo microk8s kubectl"
+    
+    # Check if sudo works
+    if ! $KUBECTL_CMD get nodes &> /dev/null; then
+        echo "❌ Error: Cannot access MicroK8s even with sudo."
+        echo "Please run the following commands to fix permissions:"
+        echo "    sudo usermod -a -G microk8s $USER"
+        echo "    sudo chown -R $USER ~/.kube"
+        echo "After this, reload the user groups by running 'newgrp microk8s' or reboot."
+        exit 1
+    fi
+fi
+
 # Check if service exists
-if ! microk8s kubectl get service ${APP_NAME}-service &> /dev/null; then
+if ! $KUBECTL_CMD get service ${APP_NAME}-service &> /dev/null; then
     echo "🔄 Service ${APP_NAME}-service belum ada, melakukan setup awal..."
     
     echo "📦 Deploying initial blue version for ${APP_NAME}..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
         -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
-       /manifests/deployment-blue.template.yaml | microk8s kubectl apply -f -
+        ./manifests/deployment-blue.template.yaml | $KUBECTL_CMD apply -f -
     
     echo "📦 Deploying initial green version for ${APP_NAME}..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
         -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
-       /manifests/deployment-green.template.yaml | microk8s kubectl apply -f -
+        ./manifests/deployment-green.template.yaml | $KUBECTL_CMD apply -f -
     
     echo "🔌 Deploying service ${APP_NAME}-service..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
-        -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
+        -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
         -e "s/__NODE_PORT__/${NODE_PORT}/g" \
-       /manifests/service.template.yaml | microk8s kubectl apply -f -
+        ./manifests/service.template.yaml | $KUBECTL_CMD apply -f -
     
     echo "🎯 Setting initial active version to blue for ${APP_NAME}-service..."
-    microk8s kubectl patch service ${APP_NAME}-service -p \
+    $KUBECTL_CMD patch service ${APP_NAME}-service -p \
         "{\"spec\": {\"selector\": {\"app\": \"${APP_NAME}\", \"version\": \"blue\"}}}"
     
     echo "✅ Initial setup complete for ${APP_NAME}"
 fi
 
 # 💡 Ambil versi aktif dari Service (blue atau green)
-ACTIVE_VERSION=$(microk8s kubectl get service ${APP_NAME}-service -o jsonpath="{.spec.selector.version}")
+ACTIVE_VERSION=$($KUBECTL_CMD get service ${APP_NAME}-service -o jsonpath="{.spec.selector.version}")
 if [ "$ACTIVE_VERSION" = "blue" ]; then
   NEW_VERSION="green"
 else
@@ -137,26 +154,26 @@ echo "Building Docker image for ${APP_NAME} version $NEW_VERSION..."
 docker build -t ${APP_NAME}:${NEW_VERSION} "$PROJECT_DIR"
 
 echo "Importing image ${APP_NAME}:${NEW_VERSION} into MicroK8s registry..."
-docker save ${APP_NAME}:${NEW_VERSION} | microk8s ctr image import -
+docker save ${APP_NAME}:${NEW_VERSION} | $KUBECTL_CMD ctr image import -
 
 # 🚀 Apply deployment
 echo "Applying deployment for ${APP_NAME}-${NEW_VERSION}..."
 sed -e "s/__APP_NAME__/${APP_NAME}/g" \
     -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
     -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
-    /manifests/deployment-${NEW_VERSION}.template.yaml | microk8s kubectl apply -f -
+    ./manifests/deployment-${NEW_VERSION}.template.yaml | $KUBECTL_CMD apply -f -
 
 # ⏱️ Tunggu sampai ready
 echo "Waiting for deployment ${APP_NAME}-${NEW_VERSION} to be ready..."
-microk8s kubectl rollout status deployment/${APP_NAME}-${NEW_VERSION}
+$KUBECTL_CMD rollout status deployment/${APP_NAME}-${NEW_VERSION}
 
 # 🔄 Switch Service selector
 echo "Switching service ${APP_NAME}-service to version ${NEW_VERSION}..."
-microk8s kubectl patch service ${APP_NAME}-service -p \
+$KUBECTL_CMD patch service ${APP_NAME}-service -p \
   "{\"spec\": {\"selector\": {\"app\": \"${APP_NAME}\", \"version\": \"${NEW_VERSION}\"}}}"
 
 # 🧹 Optional: Bersihkan deployment lama
 echo "Cleaning up old deployment: ${APP_NAME}-${OLD_VERSION}..."
-microk8s kubectl delete deployment ${APP_NAME}-${OLD_VERSION} --ignore-not-found
+$KUBECTL_CMD delete deployment ${APP_NAME}-${OLD_VERSION} --ignore-not-found
 
 echo "✅ Deployment complete for ${APP_NAME}. Now serving version ${NEW_VERSION}."
