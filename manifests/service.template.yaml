@@ -6,9 +6,9 @@ spec:
   type: NodePort
   selector:
     app: __APP_NAME__
-    version: blue # Awalnya mengarah ke blue, akan di-patch oleh deploy.sh
+    version: blue 
   ports:
     - protocol: TCP
       port: 80
       targetPort: __TARGET_PORT__
-      nodePort: __NODE_PORT__ # Anda mungkin ingin membuat nodePort ini juga dinamis atau menghapusnya jika tidak diperlukan 
+      nodePort: __NODE_PORT__ 

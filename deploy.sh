@@ -1,9 +1,50 @@
 set -e
 
+# sudo mount --bind /var/www/lokasi-2 /var/www/aplikasi-1/workspace
+
 # Ambil REPO_NAME dari environment variable, default ke "myapp" jika tidak diset
 APP_NAME=${REPO_NAME:-"myapp"}
 
 echo "🚀 Working with App: $APP_NAME"
+
+# Check if jq is installed and install it if not found
+if ! command -v jq &> /dev/null; then
+    echo "⚙️ jq not found, attempting to install it..."
+    if command -v apt-get &> /dev/null; then
+        apt-get update && apt-get install -y jq
+    elif command -v yum &> /dev/null; then
+        yum install -y jq
+    elif command -v apk &> /dev/null; then
+        apk add --no-cache jq
+    else
+        echo "⚠️ Could not install jq automatically. Using fallback method for configuration."
+    fi
+fi
+
+# Function to extract config values without jq
+extract_config_value() {
+    local app_name="$1"
+    local key="$2"
+    local default_value="$3"
+    local config_file="$4"
+    
+    # Try to extract app-specific value
+    local app_value=$(grep -A20 "\"$app_name\":" "$config_file" | grep "\"$key\":" | head -1 | sed 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/')
+    
+    # If app-specific value not found, try to get default value
+    if [ -z "$app_value" ]; then
+        local default_value_from_file=$(grep -A10 "\"defaults\":" "$config_file" | grep "\"$key\":" | head -1 | sed 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/')
+        
+        # If default value from file not found, use provided default value
+        if [ -z "$default_value_from_file" ]; then
+            echo "$default_value"
+        else
+            echo "$default_value_from_file"
+        fi
+    else
+        echo "$app_value"
+    fi
+}
 
 # Load configuration from config.json
 if [ -f "config.json" ]; then
@@ -14,16 +55,21 @@ if [ -f "config.json" ]; then
         # Try to get app-specific configuration
         TARGET_PORT=$(jq -r ".apps.\"$APP_NAME\".targetPort // .defaults.targetPort" config.json)
         NODE_PORT=$(jq -r ".apps.\"$APP_NAME\".nodePort // .defaults.nodePort" config.json)
+        DOCKER_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" config.json)
     else
-        echo "⚠️ jq command not found. Using default ports."
-        TARGET_PORT=3000
-        NODE_PORT=30000
+        echo "⚠️ jq command not found. Using grep/sed fallback to parse config.json."
+        TARGET_PORT=$(extract_config_value "$APP_NAME" "targetPort" "3000" "config.json")
+        NODE_PORT=$(extract_config_value "$APP_NAME" "nodePort" "30000" "config.json")
+        DOCKER_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "config.json")
         
-        # Calculate port based on app name hash if no config
-        # This is a fallback strategy if jq isn't available
-        APP_HASH=$(echo -n "$APP_NAME" | md5sum | tr -d -c 0-9 | cut -c 1-4)
-        TARGET_PORT=$((3000 + APP_HASH % 1000))
-        NODE_PORT=$((30000 + APP_HASH % 1000))
+        # Check if we failed to parse correctly
+        if [ -z "$TARGET_PORT" ] || [ "$TARGET_PORT" = "3000" ]; then
+            echo "⚠️ Fallback parsing may have failed, calculating hash-based ports as backup."
+            APP_HASH=$(echo -n "$APP_NAME" | md5sum | tr -d -c 0-9 | cut -c 1-4)
+            TARGET_PORT=$((3000 + APP_HASH % 1000))
+            NODE_PORT=$((30000 + APP_HASH % 1000))
+            DOCKER_PORT=$TARGET_PORT
+        fi
     fi
 else
     echo "⚠️ config.json not found. Using port calculation based on app name."
@@ -31,9 +77,10 @@ else
     APP_HASH=$(echo -n "$APP_NAME" | md5sum | tr -d -c 0-9 | cut -c 1-4)
     TARGET_PORT=$((3000 + APP_HASH % 1000))
     NODE_PORT=$((30000 + APP_HASH % 1000))
+    DOCKER_PORT=$TARGET_PORT
 fi
 
-echo "🔌 Using ports: TARGET_PORT=$TARGET_PORT, NODE_PORT=$NODE_PORT"
+echo "🔌 Using ports: TARGET_PORT=$TARGET_PORT, NODE_PORT=$NODE_PORT, DOCKER_PORT=$DOCKER_PORT"
 
 # Check if service exists
 if ! microk8s kubectl get service ${APP_NAME}-service &> /dev/null; then
@@ -42,11 +89,13 @@ if ! microk8s kubectl get service ${APP_NAME}-service &> /dev/null; then
     echo "📦 Deploying initial blue version for ${APP_NAME}..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
+        -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
        manifests/deployment-blue.template.yaml | microk8s kubectl apply -f -
     
     echo "📦 Deploying initial green version for ${APP_NAME}..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
+        -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
        manifests/deployment-green.template.yaml | microk8s kubectl apply -f -
     
     echo "🔌 Deploying service ${APP_NAME}-service..."
@@ -75,11 +124,15 @@ OLD_VERSION=$ACTIVE_VERSION
 echo "Active version for ${APP_NAME}: $ACTIVE_VERSION"
 echo "Deploying new version for ${APP_NAME}: $NEW_VERSION"
 
+# Git pull to get latest code
+echo "📥 Pulling latest code from repository for ${APP_NAME}..."
+PROJECT_DIR="workspace/${APP_NAME}"
+cd "$PROJECT_DIR"
+git pull
+cd -
+
 # 🔨 Build and push image
 echo "Building Docker image for ${APP_NAME} version $NEW_VERSION..."
-
-PROJECT_DIR="/workspace/${APP_NAME}"
-
 
 docker build -t ${APP_NAME}:${NEW_VERSION} "$PROJECT_DIR"
 
@@ -90,6 +143,7 @@ docker save ${APP_NAME}:${NEW_VERSION} | microk8s ctr image import -
 echo "Applying deployment for ${APP_NAME}-${NEW_VERSION}..."
 sed -e "s/__APP_NAME__/${APP_NAME}/g" \
     -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
+    -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
     manifests/deployment-${NEW_VERSION}.template.yaml | microk8s kubectl apply -f -
 
 # ⏱️ Tunggu sampai ready

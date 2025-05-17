@@ -44,6 +44,87 @@ function verifySignature(req, res, rawBody) {
 
 const allowedBranches = ['refs/heads/main', 'refs/heads/develop', 'refs/heads/release'];
 
+// Function to run deploy.sh for an app
+function deployApp(appName) {
+    return new Promise((resolve, reject) => {
+        const scriptPath = 'deploy.sh';
+
+        console.log(`📜 Deploying app: ${appName}`);
+        
+        if (!fs.existsSync(scriptPath)) {
+            console.error('❌ Script tidak ditemukan:', scriptPath);
+            reject(new Error('Script deploy tidak ditemukan'));
+            return;
+        }
+        
+        const isWindows = process.platform === 'win32';
+        let command, args;
+        
+        if (isWindows) {
+            const wslPath = scriptPath
+                .replace(/^([A-Z]):/, '/mnt/$1')
+                .replace(/\\/g, '/')
+                .toLowerCase();
+            console.log('📜 WSL path:', wslPath);
+            command = 'wsl';
+            args = ['bash', wslPath];
+        } else {
+            command = 'bash';
+            args = [scriptPath];
+        }
+        
+        const child = spawn(command, args, {
+            env: {
+                ...process.env,
+                REPO_NAME: appName,
+            }
+        });
+
+        let output = '';
+        let errorOutput = '';
+
+        child.stdout.on('data', (data) => {
+            const dataStr = data.toString();
+            output += dataStr;
+            console.log(`📢 [${appName}] Output:`, dataStr);
+        });
+
+        child.stderr.on('data', (data) => {
+            const dataStr = data.toString();
+            errorOutput += dataStr;
+            console.error(`❌ [${appName}] Error:`, dataStr);
+        });
+
+        child.on('close', (code) => {
+            console.log(`✅ Script selesai untuk ${appName} dengan kode exit ${code}`);
+            if (code === 0) {
+                resolve({ appName, success: true, output });
+            } else {
+                reject(new Error(`Script failed with code ${code}: ${errorOutput}`));
+            }
+        });
+
+        child.on('error', (err) => {
+            console.error(`❌ Error saat menjalankan script untuk ${appName}: ${err}`);
+            reject(err);
+        });
+    });
+}
+
+// Load configuration
+function loadConfig() {
+    try {
+        const configPath = path.join(__dirname, 'config.json');
+        if (fs.existsSync(configPath)) {
+            const configData = fs.readFileSync(configPath, 'utf8');
+            return JSON.parse(configData);
+        }
+        return { apps: {}, defaults: { targetPort: 3000, nodePort: 30000 } };
+    } catch (error) {
+        console.error('Error loading config:', error);
+        return { apps: {}, defaults: { targetPort: 3000, nodePort: 30000 } };
+    }
+}
 
 app.post('/webhook', (req, res) => {
     const isValid = verifySignature(req, res, req.rawBody);
@@ -120,6 +201,58 @@ app.post('/webhook', (req, res) => {
     }
 
     res.status(200).send('Webhook received');
+});
+
+// Ping endpoint
+app.get('/ping', (req, res) => {
+    res.status(200).json({ 
+        status: 'ok',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Init endpoint to deploy all apps from config.json
+app.post('/init', async (req, res) => {
+    try {
+        const config = loadConfig();
+        const appNames = Object.keys(config.apps);
+        
+        if (appNames.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'No apps configured in config.json' 
+            });
+        }
+        
+        console.log(`📋 Found ${appNames.length} apps to deploy: ${appNames.join(', ')}`);
+        
+        const results = [];
+        const errors = [];
+        
+        for (const appName of appNames) {
+            try {
+                const result = await deployApp(appName);
+                results.push(result);
+            } catch (error) {
+                console.error(`Failed to deploy ${appName}:`, error);
+                errors.push({ appName, error: error.message });
+            }
+        }
+        
+        res.status(200).json({ 
+            success: true,
+            deployed: results.map(r => r.appName),
+            failed: errors.map(e => e.appName),
+            errors: errors
+        });
+    } catch (error) {
+        console.error('Error processing init request:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to process init request', 
+            error: error.message 
+        });
+    }
 });
 
 app.get('/', (req, res) => {

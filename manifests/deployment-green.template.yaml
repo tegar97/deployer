@@ -23,4 +23,4 @@ spec:
         - name: PORT
           value: "__TARGET_PORT__"
         ports:
-        - containerPort: __TARGET_PORT__ 
+        - containerPort: __DOCKER_PORT__ 
