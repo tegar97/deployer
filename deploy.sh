@@ -53,12 +53,12 @@ if [ -f "config.json" ]; then
     # Check if jq is available
     if command -v jq &> /dev/null; then
         # Try to get app-specific configuration
-        TARGET_PORT=$(jq -r ".apps.\"$APP_NAME\".targetPort // .defaults.targetPort" config.json)
+        TARGET_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" config.json)
         NODE_PORT=$(jq -r ".apps.\"$APP_NAME\".nodePort // .defaults.nodePort" config.json)
         DOCKER_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" config.json)
     else
         echo "⚠️ jq command not found. Using grep/sed fallback to parse config.json."
-        TARGET_PORT=$(extract_config_value "$APP_NAME" "targetPort" "3000" "config.json")
+        TARGET_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "config.json")
         NODE_PORT=$(extract_config_value "$APP_NAME" "nodePort" "30000" "config.json")
         DOCKER_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "config.json")
         
