@@ -76,7 +76,7 @@ function deployApp(appName) {
         const child = spawn(command, args, {
             env: {
                 ...process.env,
-                REPO_NAME: appName,
+                REPO_NAME: appName || '',
             }
         });
 
@@ -135,119 +135,71 @@ app.post('/webhook', (req, res) => {
 
     const event = req.headers['x-github-event'];
     const payload = req.body;
-    const ref = payload.ref;
+    const ref = payload?.ref;
     // const branchName = ref.split('/').pop();
     // const commitMessages = payload.commits.map(commit => commit.message).join('\n');
 
     console.log(`✅ Received GitHub event: ${event}`);
-    console.log('📦 Repository:', payload.repository.full_name);
-    console.log('👤 Pushed by:', payload.pusher.name);
-    console.log('📝 Commits:\n', payload.commits.map(commit => '- ' + commit.message).join('\n'));
+    if (payload?.repository) {
+        console.log('📦 Repository:', payload.repository.full_name);
+    }
+    if (payload?.pusher) {
+        console.log('👤 Pushed by:', payload.pusher.name);
+    }
+    if (payload?.commits) {
+        console.log('📝 Commits:\n', payload.commits.map(commit => '- ' + commit.message).join('\n'));
+    }
 
     const scriptPath = path.join(__dirname, 'deploy.sh');
 
-        console.log('📜 Script path:', scriptPath);
-        if (!fs.existsSync(scriptPath)) {
-          console.error('❌ Script tidak ditemukan:', scriptPath);
-          return res.status(500).send('Script deploy tidak ditemukan');
+    console.log('📜 Script path:', scriptPath);
+    if (!fs.existsSync(scriptPath)) {
+        console.error('❌ Script tidak ditemukan:', scriptPath);
+        return res.status(500).send('Script deploy tidak ditemukan');
+    }
+
+    console.log('📜 Script path:', scriptPath);
+    
+    const isWindows = process.platform === 'win32';
+    let command, args;
+    
+    if (isWindows) {
+        const wslPath = scriptPath
+            .replace(/^([A-Z]):/, '/mnt/$1')
+            .replace(/\\/g, '/')
+            .toLowerCase();
+        console.log('📜 WSL path:', wslPath);
+        command = 'wsl';
+        args = ['bash', wslPath];
+    } else {
+        command = 'bash';
+        args = [scriptPath];
+    }
+    
+    const child = spawn(command, args, {
+        env: {
+            ...process.env,
+            // BRANCH: branchName,
+            // COMMITS: commitMessages,
+            REPO_NAME: payload?.repository?.name || '',
         }
+    });
 
-        console.log('📜 Script path:', scriptPath);
-        
-        const isWindows = process.platform === 'win32';
-        let command, args;
-        
-        if (isWindows) {
-            const wslPath = scriptPath
-                .replace(/^([A-Z]):/, '/mnt/$1')
-                .replace(/\\/g, '/')
-                .toLowerCase();
-            console.log('📜 WSL path:', wslPath);
-            command = 'wsl';
-            args = ['bash', wslPath];
-        } else {
-            command = 'bash';
-            args = [scriptPath];
-        }
-        
-        const child = spawn(command, args, {
-            env: {
-                ...process.env,
-                // BRANCH: branchName,
-                // COMMITS: commitMessages,
-                REPO_NAME: payload.repository.name,
-            }
-        });
+    child.stdout.on('data', (data) => {
+        console.log('📢 Script Output:', data.toString());
+    });
 
-        child.stdout.on('data', (data) => {
-            console.log('📢 Script Output:', data.toString());
-        });
+    child.stderr.on('data', (data) => {
+        console.error('❌ Script Error:', data.toString());
+    });
 
-        child.stderr.on('data', (data) => {
-            console.error('❌ Script Error:', data.toString());
-        });
+    child.on('close', (code) => {
+        console.log(`✅ Script selesai dengan kode exit ${code}`);
+    });
 
-        child.on('close', (code) => {
-            console.log(`✅ Script selesai dengan kode exit ${code}`);
-        });
-
-        child.on('error', (err) => {
-            console.error(`❌ Error saat menjalankan script: ${err}`);
-        });
-    // if (allowedBranches.includes(ref)) {
-    //     const scriptPath = path.join(__dirname, 'deploy.sh');
-
-    //     console.log('📜 Script path:', scriptPath);
-    //     if (!fs.existsSync(scriptPath)) {
-    //       console.error('❌ Script tidak ditemukan:', scriptPath);
-    //       return res.status(500).send('Script deploy tidak ditemukan');
-    //     }
-
-    //     console.log('📜 Script path:', scriptPath);
-        
-    //     const isWindows = process.platform === 'win32';
-    //     let command, args;
-        
-    //     if (isWindows) {
-    //         const wslPath = scriptPath
-    //             .replace(/^([A-Z]):/, '/mnt/$1')
-    //             .replace(/\\/g, '/')
-    //             .toLowerCase();
-    //         console.log('📜 WSL path:', wslPath);
-    //         command = 'wsl';
-    //         args = ['bash', wslPath];
-    //     } else {
-    //         command = 'bash';
-    //         args = [scriptPath];
-    //     }
-        
-    //     const child = spawn(command, args, {
-    //         env: {
-    //             ...process.env,
-    //             BRANCH: branchName,
-    //             COMMITS: commitMessages,
-    //             REPO_NAME: payload.repository.name,
-    //         }
-    //     });
-
-    //     child.stdout.on('data', (data) => {
-    //         console.log('📢 Script Output:', data.toString());
-    //     });
-
-    //     child.stderr.on('data', (data) => {
-    //         console.error('❌ Script Error:', data.toString());
-    //     });
-
-    //     child.on('close', (code) => {
-    //         console.log(`✅ Script selesai dengan kode exit ${code}`);
-    //     });
-
-    //     child.on('error', (err) => {
-    //         console.error(`❌ Error saat menjalankan script: ${err}`);
-    //     });
-    // } else {
-    //     console.log(`⛔ Branch ${ref} tidak di-handle. Dilewati.`);
-    // }
+    child.on('error', (err) => {
+        console.error(`❌ Error saat menjalankan script: ${err}`);
+    });
 
     res.status(200).send('Webhook received');
 });
