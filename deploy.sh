@@ -101,25 +101,27 @@ fi
 
 # Check if service exists
 if ! $KUBECTL_CMD get service ${APP_NAME}-service &> /dev/null; then
+    # script path
+    SCRIPT_PATH=$(dirname "$0")
     echo "🔄 Service ${APP_NAME}-service belum ada, melakukan setup awal..."
-    
     echo "📦 Deploying initial blue version for ${APP_NAME}..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
         -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
-        ./manifests/deployment-blue.template.yaml | $KUBECTL_CMD apply -f -
-    
-    echo "📦 Deploying initial green version for ${APP_NAME}..."
+        "${SCRIPT_PATH}/manifests/deployment-blue.template.yaml" | $KUBECTL_CMD apply -f - 
+    echo "🔄 Service ${APP_NAME}-service belum ada, melakukan setup awal..."
+
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
         -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
-        ./manifests/deployment-green.template.yaml | $KUBECTL_CMD apply -f -
-    
-    echo "🔌 Deploying service ${APP_NAME}-service..."
+        "${SCRIPT_PATH}/manifests/deployment-green.template.yaml" | $KUBECTL_CMD apply -f -
+    echo "🔄 Service ${APP_NAME}-service belum ada, melakukan setup awal..."
+
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
         -e "s/__NODE_PORT__/${NODE_PORT}/g" \
-        ./manifests/service.template.yaml | $KUBECTL_CMD apply -f -
+        "${SCRIPT_PATH}/manifests/service.template.yaml" | $KUBECTL_CMD apply -f -
+   
     
     echo "🎯 Setting initial active version to blue for ${APP_NAME}-service..."
     $KUBECTL_CMD patch service ${APP_NAME}-service -p \
@@ -143,10 +145,15 @@ echo "Deploying new version for ${APP_NAME}: $NEW_VERSION"
 
 # Git pull to get latest code
 echo "📥 Pulling latest code from repository for ${APP_NAME}..."
-PROJECT_DIR="/workspace/${APP_NAME}"
+
+# Git pull to get latest code
+echo "📥 Pulling latest code from repository for ${APP_NAME}..."
+SCRIPT_PATH=$(dirname "$0")
+PROJECT_DIR="${SCRIPT_PATH}/workspace/${APP_NAME}"
 cd "$PROJECT_DIR"
 git pull
 cd -
+
 
 # 🔨 Build and push image
 echo "Building Docker image for ${APP_NAME} version $NEW_VERSION..."
@@ -154,14 +161,14 @@ echo "Building Docker image for ${APP_NAME} version $NEW_VERSION..."
 docker build -t ${APP_NAME}:${NEW_VERSION} "$PROJECT_DIR"
 
 echo "Importing image ${APP_NAME}:${NEW_VERSION} into MicroK8s registry..."
-docker save ${APP_NAME}:${NEW_VERSION} | $KUBECTL_CMD ctr image import -
+docker save ${APP_NAME}:${NEW_VERSION} | microk8s ctr image import -
 
 # 🚀 Apply deployment
 echo "Applying deployment for ${APP_NAME}-${NEW_VERSION}..."
 sed -e "s/__APP_NAME__/${APP_NAME}/g" \
     -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
     -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
-    ./manifests/deployment-${NEW_VERSION}.template.yaml | $KUBECTL_CMD apply -f -
+    "${SCRIPT_PATH}/manifests/deployment-${NEW_VERSION}.template.yaml" | $KUBECTL_CMD apply -f -
 
 # ⏱️ Tunggu sampai ready
 echo "Waiting for deployment ${APP_NAME}-${NEW_VERSION} to be ready..."
