@@ -137,7 +137,7 @@ app.post('/webhook', (req, res) => {
     const payload = req.body;
     const ref = payload.ref;
     // const branchName = ref.split('/').pop();
-    const commitMessages = payload.commits.map(commit => commit.message).join('\n');
+    // const commitMessages = payload.commits.map(commit => commit.message).join('\n');
 
     console.log(`✅ Received GitHub event: ${event}`);
     console.log('📦 Repository:', payload.repository.full_name);
@@ -174,7 +174,7 @@ app.post('/webhook', (req, res) => {
             env: {
                 ...process.env,
                 // BRANCH: branchName,
-                COMMITS: commitMessages,
+                // COMMITS: commitMessages,
                 REPO_NAME: payload.repository.name,
             }
         });
