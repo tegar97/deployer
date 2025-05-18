@@ -63,13 +63,13 @@ if [ -f "config.json" ]; then
         DOCKER_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "config.json")
         
         # Check if we failed to parse correctly
-        if [ -z "$TARGET_PORT" ] || [ "$TARGET_PORT" = "3000" ]; then
-            echo "⚠️ Fallback parsing may have failed, calculating hash-based ports as backup."
-            APP_HASH=$(echo -n "$APP_NAME" | md5sum | tr -d -c 0-9 | cut -c 1-4)
-            TARGET_PORT=$((3000 + APP_HASH % 1000))
-            NODE_PORT=$((30000 + APP_HASH % 1000))
-            DOCKER_PORT=$TARGET_PORT
-        fi
+        # if [ -z "$TARGET_PORT" ] || [ "$TARGET_PORT" = "3000" ]; then
+        #     echo "⚠️ Fallback parsing may have failed, calculating hash-based ports as backup."
+        #     APP_HASH=$(echo -n "$APP_NAME" | md5sum | tr -d -c 0-9 | cut -c 1-4)
+        #     TARGET_PORT=$((3000 + APP_HASH % 1000))
+        #     NODE_PORT=$((30000 + APP_HASH % 1000))
+        #     DOCKER_PORT=$TARGET_PORT
+        # fi
     fi
 else
     echo "⚠️ config.json not found. Using port calculation based on app name."
