@@ -17,10 +17,5 @@ spec:
       containers:
       - name: app
         image: __APP_NAME__:green
-        env:
-        - name: APP_VERSION
-          value: "green"
-        - name: PORT
-          value: "__TARGET_PORT__"
         ports:
         - containerPort: __DOCKER_PORT__ 
