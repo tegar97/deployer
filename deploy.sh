@@ -122,8 +122,8 @@ if [ "$SERVICE_EXISTS" -eq 0 ]; then
     docker build -t ${APP_NAME}:green "$PROJECT_DIR"
     
     echo "Importing images into MicroK8s registry..."
-    docker save ${APP_NAME}:blue | microk8s ctr image import -
-    docker save ${APP_NAME}:green | microk8s ctr image import -
+    docker save ${APP_NAME}:blue | sudo microk8s ctr image import -
+    docker save ${APP_NAME}:green | sudo microk8s ctr image import -
     
     echo "📦 Deploying initial blue version for ${APP_NAME}..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
