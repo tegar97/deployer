@@ -102,34 +102,55 @@ if ! $KUBECTL_CMD get nodes &> /dev/null; then
 fi
 
 # Check if service exists
-if ! $KUBECTL_CMD get service ${APP_NAME}-service &> /dev/null; then
+SERVICE_EXISTS=$($KUBECTL_CMD get service | grep ${APP_NAME}-service | wc -l)
+if [ "$SERVICE_EXISTS" -eq 0 ]; then
     # script path
     SCRIPT_PATH=$(dirname "$0")
     echo "🔄 Service ${APP_NAME}-service belum ada, melakukan setup awal..."
+    
+    # Git pull to get latest code
+    echo "📥 Pulling latest code from repository for ${APP_NAME}..."
+    SCRIPT_PATH=$(dirname "$0")
+    PROJECT_DIR="${SCRIPT_PATH}/workspace/${APP_NAME}"
+    cd "$PROJECT_DIR"
+    git pull
+    cd -
+    
+    # Build and import the initial images
+    echo "🔨 Building Docker images for initial setup..."
+    docker build -t ${APP_NAME}:blue "$PROJECT_DIR"
+    docker build -t ${APP_NAME}:green "$PROJECT_DIR"
+    
+    echo "Importing images into MicroK8s registry..."
+    docker save ${APP_NAME}:blue | microk8s ctr image import -
+    docker save ${APP_NAME}:green | microk8s ctr image import -
+    
     echo "📦 Deploying initial blue version for ${APP_NAME}..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
         -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
         "${SCRIPT_PATH}/manifests/deployment-blue.template.yaml" | $KUBECTL_CMD apply -f - 
-    echo "🔄 Service ${APP_NAME}-service belum ada, melakukan setup awal..."
-
+        
+    echo "📦 Deploying initial green version for ${APP_NAME}..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
         -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
         "${SCRIPT_PATH}/manifests/deployment-green.template.yaml" | $KUBECTL_CMD apply -f -
-    echo "🔄 Service ${APP_NAME}-service belum ada, melakukan setup awal..."
-
+        
+    echo "🔄 Creating service ${APP_NAME}-service..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
         -e "s/__NODE_PORT__/${NODE_PORT}/g" \
         "${SCRIPT_PATH}/manifests/service.template.yaml" | $KUBECTL_CMD apply -f -
    
-    
     echo "🎯 Setting initial active version to blue for ${APP_NAME}-service..."
     $KUBECTL_CMD patch service ${APP_NAME}-service -p \
         "{\"spec\": {\"selector\": {\"app\": \"${APP_NAME}\", \"version\": \"blue\"}}}"
     
     echo "✅ Initial setup complete for ${APP_NAME}"
+    
+    # Since we've already done the git pull and setup, skip the rest of the deployment
+    exit 0
 fi
 
 # 💡 Ambil versi aktif dari Service (blue atau green)
