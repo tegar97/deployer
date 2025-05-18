@@ -184,7 +184,7 @@ echo "Building Docker image for ${APP_NAME} version $NEW_VERSION..."
 docker build -t ${APP_NAME}:${NEW_VERSION} "$PROJECT_DIR"
 
 echo "Importing image ${APP_NAME}:${NEW_VERSION} into MicroK8s registry..."
-docker save ${APP_NAME}:${NEW_VERSION} | microk8s ctr image import -
+docker save ${APP_NAME}:${NEW_VERSION} | sudo microk8s ctr image import -
 
 # 🚀 Apply deployment
 echo "Applying deployment for ${APP_NAME}-${NEW_VERSION}..."
