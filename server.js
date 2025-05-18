@@ -178,7 +178,6 @@ app.post('/webhook', (req, res) => {
     
     const child = spawn(command, args, {
         env: {
-            ...process.env,
             // BRANCH: branchName,
             // COMMITS: commitMessages,
             REPO_NAME: payload?.repository?.name || '',

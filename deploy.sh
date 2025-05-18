@@ -46,21 +46,23 @@ extract_config_value() {
     fi
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/config.json"
 # Load configuration from config.json
-if [ -f "config.json" ]; then
+if [ -f "$CONFIG_FILE" ]; then
     echo "📋 Loading configuration from config.json..."
     
     # Check if jq is available
     if command -v jq &> /dev/null; then
         # Try to get app-specific configuration
-        TARGET_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" config.json)
-        NODE_PORT=$(jq -r ".apps.\"$APP_NAME\".nodePort // .defaults.nodePort" config.json)
-        DOCKER_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" config.json)
+        TARGET_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" "$CONFIG_FILE")
+        NODE_PORT=$(jq -r ".apps.\"$APP_NAME\".nodePort // .defaults.nodePort" "$CONFIG_FILE")
+        DOCKER_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" "$CONFIG_FILE")
     else
         echo "⚠️ jq command not found. Using grep/sed fallback to parse config.json."
-        TARGET_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "config.json")
-        NODE_PORT=$(extract_config_value "$APP_NAME" "nodePort" "30000" "config.json")
-        DOCKER_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "config.json")
+        TARGET_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "$CONFIG_FILE")
+        NODE_PORT=$(extract_config_value "$APP_NAME" "nodePort" "30000" "$CONFIG_FILE")
+        DOCKER_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "$CONFIG_FILE")
         
         # Check if we failed to parse correctly
         # if [ -z "$TARGET_PORT" ] || [ "$TARGET_PORT" = "3000" ]; then
