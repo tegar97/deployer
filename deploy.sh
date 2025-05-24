@@ -58,6 +58,7 @@ if [ -f "$CONFIG_FILE" ]; then
         TARGET_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" "$CONFIG_FILE")
         NODE_PORT=$(jq -r ".apps.\"$APP_NAME\".nodePort // .defaults.nodePort" "$CONFIG_FILE")
         DOCKER_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" "$CONFIG_FILE")
+        DOMAIN=$(jq -r ".apps.\"$APP_NAME\".domain // .defaults.domain" "$CONFIG_FILE")
     else
         echo "⚠️ jq command not found. Using grep/sed fallback to parse config.json."
         TARGET_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "$CONFIG_FILE")
@@ -86,6 +87,8 @@ echo "🔌 Using ports: TARGET_PORT=$TARGET_PORT, NODE_PORT=$NODE_PORT, DOCKER_P
 
 # Check if user has MicroK8s permissions, if not try with sudo
 KUBECTL_CMD="sudo microk8s kubectl"
+TLS_SECRET_NAME="$APP_NAME-tls"
+
 if ! $KUBECTL_CMD get nodes &> /dev/null; then
     echo "⚠️ Insufficient permissions for MicroK8s. Trying with sudo..."
     KUBECTL_CMD="sudo microk8s kubectl"
@@ -146,6 +149,36 @@ if [ "$SERVICE_EXISTS" -eq 0 ]; then
     echo "🎯 Setting initial active version to blue for ${APP_NAME}-service..."
     $KUBECTL_CMD patch service ${APP_NAME}-service -p \
         "{\"spec\": {\"selector\": {\"app\": \"${APP_NAME}\", \"version\": \"blue\"}}}"
+
+        CERT_MANAGER_NS="cert-manager"
+        ISSUER_EXISTS=$($KUBECTL_CMD get clusterissuer letsencrypt-prod --ignore-not-found | wc -l)
+        if [ "$ISSUER_EXISTS" -eq 0 ]; then
+            echo "📜 Creating ClusterIssuer..."
+            $KUBECTL_CMD apply -f - <<EOF
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    metadata:
+    name: letsencrypt-prod
+    spec:
+    acme:
+        email: your@email.com
+        server: https://acme-v02.api.letsencrypt.org/directory
+        privateKeySecretRef:
+        name: letsencrypt-prod
+        solvers:
+        - http01:
+            ingress:
+            class: public
+    EOF
+        fi
+
+        echo "🌐 Creating Ingress..."
+        sed -e "s/__APP_NAME__/$APP_NAME/g" \
+            -e "s/__DOMAIN__/$DOMAIN/g" \
+            -e "s/__TLS_SECRET__/$TLS_SECRET_NAME/g" \
+            "$SCRIPT_DIR/manifests/ingress.template.yaml" | $KUBECTL_CMD apply -f -
+    fi
+
     
     echo "✅ Initial setup complete for ${APP_NAME}"
     
