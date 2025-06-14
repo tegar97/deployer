@@ -15,7 +15,10 @@ spec:
         version: green
     spec:
       containers:
-      - name: app
+      - name: __APP_NAME__
         image: __APP_NAME__:green
         ports:
-        - containerPort: __DOCKER_PORT__ 
+        - containerPort: __DOCKER_PORT__
+        envFrom:
+        - configMapRef:
+            name: __APP_NAME__-env 

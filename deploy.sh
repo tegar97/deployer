@@ -128,6 +128,9 @@ if [ "$SERVICE_EXISTS" -eq 0 ]; then
     docker save ${APP_NAME}:blue | sudo microk8s ctr image import -
     docker save ${APP_NAME}:green | sudo microk8s ctr image import -
     
+    # Ensure ConfigMap exists before any deployment
+    ensure_configmap "$APP_NAME"
+    
     echo "📦 Deploying initial blue version for ${APP_NAME}..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
@@ -245,6 +248,14 @@ ensure_configmap() {
     if [ -f "$env_file" ]; then
         echo "📝 Ensuring ConfigMap exists and is updated..."
         $KUBECTL_CMD create configmap ${app_name}-env --from-env-file="$env_file" --dry-run=client -o yaml | $KUBECTL_CMD apply -f -
+        
+        # Verify ConfigMap was created
+        if ! $KUBECTL_CMD get configmap ${app_name}-env &> /dev/null; then
+            echo "❌ Failed to create ConfigMap ${app_name}-env"
+            return 1
+        fi
+        
+        echo "✅ ConfigMap ${app_name}-env created/updated successfully"
         return 0
     else
         echo "⚠️ .env file not found at $env_file"
@@ -252,7 +263,7 @@ ensure_configmap() {
     fi
 }
 
-# Pada bagian update deployment (sebelum apply deployment baru)
+# Pada bagian update deployment
 echo "Applying deployment for ${APP_NAME}-${NEW_VERSION}..."
 
 # Ensure ConfigMap exists before deployment
@@ -263,11 +274,6 @@ sed -e "s/__APP_NAME__/${APP_NAME}/g" \
     -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
     -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
     "${SCRIPT_PATH}/manifests/deployment-${NEW_VERSION}.template.yaml" | $KUBECTL_CMD apply -f -
-
-# Update deployment to use ConfigMap
-echo "🔄 Updating deployment to use ConfigMap..."
-$KUBECTL_CMD patch deployment ${APP_NAME}-${NEW_VERSION} -p \
-    "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${APP_NAME}\",\"envFrom\":[{\"configMapRef\":{\"name\":\"${APP_NAME}-env\"}}]}]}}}}"
 
 # ⏱️ Tunggu sampai ready
 echo "Waiting for deployment ${APP_NAME}-${NEW_VERSION} to be ready..."
