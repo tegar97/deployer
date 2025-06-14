@@ -158,6 +158,10 @@ if [ "$SERVICE_EXISTS" -eq 0 ]; then
         
         # Update deployments to use the ConfigMap
         echo "🔄 Updating deployments to use ConfigMap..."
+        $KUBECTL_CMD  set env deployment/${APP_NAME}-blue --from=configmap/${APP_NAME}-env
+        $KUBECTL_CMD  set env deployment/${APP_NAME}-green --from=configmap/${APP_NAME}-env
+
+
         $KUBECTL_CMD patch deployment ${APP_NAME}-blue -p \
             "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${APP_NAME}\",\"envFrom\":[{\"configMapRef\":{\"name\":\"${APP_NAME}-env\"}}]}]}}}}"
         $KUBECTL_CMD patch deployment ${APP_NAME}-green -p \
