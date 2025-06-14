@@ -1,5 +1,28 @@
 set -e
 
+# Function to ensure ConfigMap exists and is updated
+ensure_configmap() {
+    local app_name=$1
+    local env_file="/var/www/env/${app_name}.env"
+    
+    if [ -f "$env_file" ]; then
+        echo "📝 Ensuring ConfigMap exists and is updated..."
+        $KUBECTL_CMD create configmap ${app_name}-env --from-env-file="$env_file" --dry-run=client -o yaml | $KUBECTL_CMD apply -f -
+        
+        # Verify ConfigMap was created
+        if ! $KUBECTL_CMD get configmap ${app_name}-env &> /dev/null; then
+            echo "❌ Failed to create ConfigMap ${app_name}-env"
+            return 1
+        fi
+        
+        echo "✅ ConfigMap ${app_name}-env created/updated successfully"
+        return 0
+    else
+        echo "⚠️ .env file not found at $env_file"
+        return 1
+    fi
+}
+
 # sudo mount --bind /var/www/lokasi-2 /var/www/aplikasi-1/workspace
 
 # Ambil REPO_NAME dari environment variable, default ke "myapp" jika tidak diset
@@ -239,29 +262,6 @@ docker build -t ${APP_NAME}:${NEW_VERSION} "$PROJECT_DIR"
 
 echo "Importing image ${APP_NAME}:${NEW_VERSION} into MicroK8s registry..."
 docker save ${APP_NAME}:${NEW_VERSION} | sudo microk8s ctr image import -
-
-# Function to ensure ConfigMap exists and is updated
-ensure_configmap() {
-    local app_name=$1
-    local env_file="/var/www/env/${app_name}.env"
-    
-    if [ -f "$env_file" ]; then
-        echo "📝 Ensuring ConfigMap exists and is updated..."
-        $KUBECTL_CMD create configmap ${app_name}-env --from-env-file="$env_file" --dry-run=client -o yaml | $KUBECTL_CMD apply -f -
-        
-        # Verify ConfigMap was created
-        if ! $KUBECTL_CMD get configmap ${app_name}-env &> /dev/null; then
-            echo "❌ Failed to create ConfigMap ${app_name}-env"
-            return 1
-        fi
-        
-        echo "✅ ConfigMap ${app_name}-env created/updated successfully"
-        return 0
-    else
-        echo "⚠️ .env file not found at $env_file"
-        return 1
-    fi
-}
 
 # Pada bagian update deployment
 echo "Applying deployment for ${APP_NAME}-${NEW_VERSION}..."
