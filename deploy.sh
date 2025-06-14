@@ -150,6 +150,22 @@ if [ "$SERVICE_EXISTS" -eq 0 ]; then
     $KUBECTL_CMD patch service ${APP_NAME}-service -p \
         "{\"spec\": {\"selector\": {\"app\": \"${APP_NAME}\", \"version\": \"blue\"}}}"
 
+    # Create ConfigMap from .env file
+    ENV_FILE="/var/www/env/${APP_NAME}.env"
+    if [ -f "$ENV_FILE" ]; then
+        echo "📝 Creating ConfigMap from .env file..."
+        $KUBECTL_CMD create configmap ${APP_NAME}-env --from-env-file="$ENV_FILE" --dry-run=client -o yaml | $KUBECTL_CMD apply -f -
+        
+        # Update deployments to use the ConfigMap
+        echo "🔄 Updating deployments to use ConfigMap..."
+        $KUBECTL_CMD patch deployment ${APP_NAME}-blue -p \
+            "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${APP_NAME}\",\"envFrom\":[{\"configMapRef\":{\"name\":\"${APP_NAME}-env\"}}]}]}}}}"
+        $KUBECTL_CMD patch deployment ${APP_NAME}-green -p \
+            "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${APP_NAME}\",\"envFrom\":[{\"configMapRef\":{\"name\":\"${APP_NAME}-env\"}}]}]}}}}"
+    else
+        echo "⚠️ .env file not found at $ENV_FILE"
+    fi
+
     CERT_MANAGER_NS="cert-manager"
     ISSUER_EXISTS=$($KUBECTL_CMD get clusterissuer letsencrypt-prod --ignore-not-found | wc -l)
     if [ "$ISSUER_EXISTS" -eq 0 ]; then
@@ -223,6 +239,17 @@ sed -e "s/__APP_NAME__/${APP_NAME}/g" \
     -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
     -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
     "${SCRIPT_PATH}/manifests/deployment-${NEW_VERSION}.template.yaml" | $KUBECTL_CMD apply -f -
+
+# Update ConfigMap if .env file exists
+if [ -f "$ENV_FILE" ]; then
+    echo "📝 Updating ConfigMap from .env file..."
+    $KUBECTL_CMD create configmap ${APP_NAME}-env --from-env-file="$ENV_FILE" --dry-run=client -o yaml | $KUBECTL_CMD apply -f -
+    
+    # Update the new deployment to use ConfigMap
+    echo "🔄 Updating deployment to use ConfigMap..."
+    $KUBECTL_CMD patch deployment ${APP_NAME}-${NEW_VERSION} -p \
+        "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${APP_NAME}\",\"envFrom\":[{\"configMapRef\":{\"name\":\"${APP_NAME}-env\"}}]}]}}}}"
+fi
 
 # ⏱️ Tunggu sampai ready
 echo "Waiting for deployment ${APP_NAME}-${NEW_VERSION} to be ready..."

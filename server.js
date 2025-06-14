@@ -44,7 +44,6 @@ function verifySignature(req, res, rawBody) {
 
 const allowedBranches = ['refs/heads/main', 'refs/heads/develop', 'refs/heads/release'];
 
-// Function to run deploy.sh for an app
 function deployApp(appName) {
     return new Promise((resolve, reject) => {
         const scriptPath = path.join(__dirname, 'deploy.sh');
