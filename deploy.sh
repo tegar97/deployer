@@ -237,23 +237,37 @@ docker build -t ${APP_NAME}:${NEW_VERSION} "$PROJECT_DIR"
 echo "Importing image ${APP_NAME}:${NEW_VERSION} into MicroK8s registry..."
 docker save ${APP_NAME}:${NEW_VERSION} | sudo microk8s ctr image import -
 
-# 🚀 Apply deployment
+# Function to ensure ConfigMap exists and is updated
+ensure_configmap() {
+    local app_name=$1
+    local env_file="/var/www/env/${app_name}.env"
+    
+    if [ -f "$env_file" ]; then
+        echo "📝 Ensuring ConfigMap exists and is updated..."
+        $KUBECTL_CMD create configmap ${app_name}-env --from-env-file="$env_file" --dry-run=client -o yaml | $KUBECTL_CMD apply -f -
+        return 0
+    else
+        echo "⚠️ .env file not found at $env_file"
+        return 1
+    fi
+}
+
+# Pada bagian update deployment (sebelum apply deployment baru)
 echo "Applying deployment for ${APP_NAME}-${NEW_VERSION}..."
+
+# Ensure ConfigMap exists before deployment
+ensure_configmap "$APP_NAME"
+
+# Apply deployment with ConfigMap
 sed -e "s/__APP_NAME__/${APP_NAME}/g" \
     -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
     -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
     "${SCRIPT_PATH}/manifests/deployment-${NEW_VERSION}.template.yaml" | $KUBECTL_CMD apply -f -
 
-# Update ConfigMap if .env file exists
-if [ -f "$ENV_FILE" ]; then
-    echo "📝 Updating ConfigMap from .env file..."
-    $KUBECTL_CMD create configmap ${APP_NAME}-env --from-env-file="$ENV_FILE" --dry-run=client -o yaml | $KUBECTL_CMD apply -f -
-    
-    # Update the new deployment to use ConfigMap
-    echo "🔄 Updating deployment to use ConfigMap..."
-    $KUBECTL_CMD patch deployment ${APP_NAME}-${NEW_VERSION} -p \
-        "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${APP_NAME}\",\"envFrom\":[{\"configMapRef\":{\"name\":\"${APP_NAME}-env\"}}]}]}}}}"
-fi
+# Update deployment to use ConfigMap
+echo "🔄 Updating deployment to use ConfigMap..."
+$KUBECTL_CMD patch deployment ${APP_NAME}-${NEW_VERSION} -p \
+    "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${APP_NAME}\",\"envFrom\":[{\"configMapRef\":{\"name\":\"${APP_NAME}-env\"}}]}]}}}}"
 
 # ⏱️ Tunggu sampai ready
 echo "Waiting for deployment ${APP_NAME}-${NEW_VERSION} to be ready..."
