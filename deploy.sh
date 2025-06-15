@@ -254,14 +254,46 @@ cd "$PROJECT_DIR"
 git pull
 cd -
 
-
-# 🔨 Build and push image
-echo "Building Docker image for ${APP_NAME} version $NEW_VERSION..."
-
-docker build -t ${APP_NAME}:${NEW_VERSION} "$PROJECT_DIR"
-
-echo "Importing image ${APP_NAME}:${NEW_VERSION} into MicroK8s registry..."
-docker save ${APP_NAME}:${NEW_VERSION} | sudo microk8s ctr image import -
+# Function to verify deployment is using new image
+verify_deployment_image() {
+    local app_name=$1
+    local version=$2
+    local expected_image="${app_name}:${version}"
+    
+    echo "🔍 Verifying deployment is using correct image..."
+    
+    # Get the current image
+    local current_image=$($KUBECTL_CMD get deployment ${app_name}-${version} -o jsonpath="{.spec.template.spec.containers[0].image}")
+    
+    if [ "$current_image" != "$expected_image" ]; then
+        echo "❌ Deployment is not using the correct image"
+        echo "Expected: $expected_image"
+        echo "Current: $current_image"
+        return 1
+    fi
+    
+    # Force pull new image
+    echo "🔄 Forcing image pull..."
+    $KUBECTL_CMD set image deployment/${app_name}-${version} ${app_name}=${expected_image} --record
+    
+    # Wait for rollout to complete
+    echo "⏱️ Waiting for rollout to complete..."
+    $KUBECTL_CMD rollout status deployment/${app_name}-${version} --timeout=300s
+    
+    # Verify pod is using new image
+    local pod_name=$($KUBECTL_CMD get pod -l app=${app_name},version=${version} -o jsonpath="{.items[0].metadata.name}")
+    local pod_image=$($KUBECTL_CMD get pod $pod_name -o jsonpath="{.spec.containers[0].image}")
+    
+    if [ "$pod_image" != "$expected_image" ]; then
+        echo "❌ Pod is not using the correct image"
+        echo "Expected: $expected_image"
+        echo "Current: $pod_image"
+        return 1
+    fi
+    
+    echo "✅ Deployment verified using correct image"
+    return 0
+}
 
 # Pada bagian update deployment
 echo "Applying deployment for ${APP_NAME}-${NEW_VERSION}..."
@@ -269,23 +301,43 @@ echo "Applying deployment for ${APP_NAME}-${NEW_VERSION}..."
 # Ensure ConfigMap exists before deployment
 ensure_configmap "$APP_NAME"
 
+# Build and import the new image
+echo "Building Docker image for ${APP_NAME} version $NEW_VERSION..."
+docker build -t ${APP_NAME}:${NEW_VERSION} "$PROJECT_DIR"
+
+echo "Importing image ${APP_NAME}:${NEW_VERSION} into MicroK8s registry..."
+docker save ${APP_NAME}:${NEW_VERSION} | sudo microk8s ctr image import -
+
 # Apply deployment with ConfigMap
+echo "🚀 Applying deployment for ${APP_NAME}-${NEW_VERSION}..."
 sed -e "s/__APP_NAME__/${APP_NAME}/g" \
     -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
     -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
     "${SCRIPT_PATH}/manifests/deployment-${NEW_VERSION}.template.yaml" | $KUBECTL_CMD apply -f -
 
-# ⏱️ Tunggu sampai ready
-echo "Waiting for deployment ${APP_NAME}-${NEW_VERSION} to be ready..."
-$KUBECTL_CMD rollout status deployment/${APP_NAME}-${NEW_VERSION}
+# Verify deployment is using new image
+verify_deployment_image "$APP_NAME" "$NEW_VERSION"
 
-# 🔄 Switch Service selector
-echo "Switching service ${APP_NAME}-service to version ${NEW_VERSION}..."
+# Switch service to new version
+echo "🔄 Switching service ${APP_NAME}-service to version ${NEW_VERSION}..."
 $KUBECTL_CMD patch service ${APP_NAME}-service -p \
   "{\"spec\": {\"selector\": {\"app\": \"${APP_NAME}\", \"version\": \"${NEW_VERSION}\"}}}"
 
-# 🧹 Optional: Bersihkan deployment lama
-echo "Cleaning up old deployment: ${APP_NAME}-${OLD_VERSION}..."
+# Wait for service to be ready
+echo "⏱️ Waiting for service to be ready..."
+sleep 10
+
+# Verify service is pointing to new version
+SERVICE_VERSION=$($KUBECTL_CMD get service ${APP_NAME}-service -o jsonpath="{.spec.selector.version}")
+if [ "$SERVICE_VERSION" != "$NEW_VERSION" ]; then
+    echo "❌ Service is not pointing to the new version"
+    echo "Expected: $NEW_VERSION"
+    echo "Current: $SERVICE_VERSION"
+    exit 1
+fi
+
+# Clean up old deployment
+echo "🧹 Cleaning up old deployment: ${APP_NAME}-${OLD_VERSION}..."
 $KUBECTL_CMD delete deployment ${APP_NAME}-${OLD_VERSION} --ignore-not-found
 
 echo "✅ Deployment complete for ${APP_NAME}. Now serving version ${NEW_VERSION}."
