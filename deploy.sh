@@ -341,3 +341,62 @@ echo "🧹 Cleaning up old deployment: ${APP_NAME}-${OLD_VERSION}..."
 $KUBECTL_CMD delete deployment ${APP_NAME}-${OLD_VERSION} --ignore-not-found
 
 echo "✅ Deployment complete for ${APP_NAME}. Now serving version ${NEW_VERSION}."
+
+# Function to send Telegram notification
+send_telegram_notification() {
+    local app_name=$1
+    local version=$2
+    local status=$3
+    local message=$4
+    
+    # Get Telegram configuration from config.json
+    if [ -f "$CONFIG_FILE" ]; then
+        if command -v jq &> /dev/null; then
+            TELEGRAM_BOT_TOKEN=$(jq -r ".telegram.botToken // empty" "$CONFIG_FILE")
+            TELEGRAM_CHAT_ID=$(jq -r ".telegram.chatId // empty" "$CONFIG_FILE")
+        else
+            # Fallback using grep/sed if jq is not available
+            TELEGRAM_BOT_TOKEN=$(grep -A5 "\"telegram\":" "$CONFIG_FILE" | grep "\"botToken\":" | head -1 | sed 's/.*"botToken"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+            TELEGRAM_CHAT_ID=$(grep -A5 "\"telegram\":" "$CONFIG_FILE" | grep "\"chatId\":" | head -1 | sed 's/.*"chatId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        fi
+    fi
+    
+    # Check if Telegram configuration exists
+    if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+        echo "⚠️ Telegram configuration not found in config.json"
+        return 1
+    fi
+    
+    # Prepare message
+    local emoji="✅"
+    if [ "$status" = "error" ]; then
+        emoji="❌"
+    fi
+    
+    local full_message="*Deployment Status* $emoji\n\n*App:* \`$app_name\`\n*Version:* \`$version\`\n*Status:* \`$status\`\n\n$message"
+    
+    # Send notification
+    echo "📱 Sending Telegram notification..."
+    curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"$full_message\",\"parse_mode\":\"Markdown\"}" \
+        "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"
+    
+    if [ $? -eq 0 ]; then
+        echo "✅ Telegram notification sent successfully"
+        return 0
+    else
+        echo "❌ Failed to send Telegram notification"
+        return 1
+    fi
+}
+
+# Send success notification
+send_telegram_notification "$APP_NAME" "$NEW_VERSION" "success" "Deployment completed successfully. Service is now running version $NEW_VERSION."
+
+# Pada bagian error handling (tambahkan di tempat yang sesuai)
+if [ $? -ne 0 ]; then
+    echo "❌ Deployment failed"
+    send_telegram_notification "$APP_NAME" "$NEW_VERSION" "error" "Deployment failed. Please check the logs for more information."
+    exit 1
+fi
