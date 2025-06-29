@@ -243,6 +243,9 @@ OLD_VERSION=$ACTIVE_VERSION
 echo "Active version for ${APP_NAME}: $ACTIVE_VERSION"
 echo "Deploying new version for ${APP_NAME}: $NEW_VERSION"
 
+# Send pending status to GitHub
+send_github_status "$APP_NAME" "pending" "Deployment is in progress..." ""
+
 # Git pull to get latest code
 echo "📥 Pulling latest code from repository for ${APP_NAME}..."
 
@@ -318,6 +321,19 @@ sed -e "s/__APP_NAME__/${APP_NAME}/g" \
 # Verify deployment is using new image
 verify_deployment_image "$APP_NAME" "$NEW_VERSION"
 
+# Check if deployment verification failed
+if [ $? -ne 0 ]; then
+    echo "❌ Deployment verification failed"
+    
+    # Send failure status to GitHub
+    send_github_status "$APP_NAME" "failure" "Deployment verification failed - image not updated" ""
+    
+    # Send error notification to Telegram
+    send_telegram_notification "$APP_NAME" "$NEW_VERSION" "error" "Deployment verification failed - image not updated"
+    
+    exit 1
+fi
+
 # Switch service to new version
 echo "🔄 Switching service ${APP_NAME}-service to version ${NEW_VERSION}..."
 $KUBECTL_CMD patch service ${APP_NAME}-service -p \
@@ -333,6 +349,13 @@ if [ "$SERVICE_VERSION" != "$NEW_VERSION" ]; then
     echo "❌ Service is not pointing to the new version"
     echo "Expected: $NEW_VERSION"
     echo "Current: $SERVICE_VERSION"
+    
+    # Send failure status to GitHub
+    send_github_status "$APP_NAME" "failure" "Service failed to switch to new version" ""
+    
+    # Send error notification to Telegram
+    send_telegram_notification "$APP_NAME" "$NEW_VERSION" "error" "Service failed to switch to new version"
+    
     exit 1
 fi
 
@@ -341,6 +364,12 @@ echo "🧹 Cleaning up old deployment: ${APP_NAME}-${OLD_VERSION}..."
 $KUBECTL_CMD delete deployment ${APP_NAME}-${OLD_VERSION} --ignore-not-found
 
 echo "✅ Deployment complete for ${APP_NAME}. Now serving version ${NEW_VERSION}."
+
+# Send success status to GitHub
+send_github_status "$APP_NAME" "success" "Deployment completed successfully" ""
+
+# Send success notification
+send_telegram_notification "$APP_NAME" "$NEW_VERSION" "success" "Deployment completed successfully. Service is now running version $NEW_VERSION."
 
 # Function to send Telegram notification
 send_telegram_notification() {
@@ -391,12 +420,97 @@ send_telegram_notification() {
     fi
 }
 
-# Send success notification
-send_telegram_notification "$APP_NAME" "$NEW_VERSION" "success" "Deployment completed successfully. Service is now running version $NEW_VERSION."
+# Function to send GitHub commit status
+send_github_status() {
+    local app_name=$1
+    local status=$2
+    local description=$3
+    local target_url=$4
+    
+    # Get GitHub configuration from config.json
+    if [ -f "$CONFIG_FILE" ]; then
+        if command -v jq &> /dev/null; then
+            GITHUB_TOKEN=$(jq -r ".github.token // empty" "$CONFIG_FILE")
+            GITHUB_OWNER=$(jq -r ".github.owner // empty" "$CONFIG_FILE")
+            GITHUB_REPO=$(jq -r ".apps.\"$app_name\".repo // .github.defaultRepo // empty" "$CONFIG_FILE")
+        else
+            # Fallback using grep/sed if jq is not available
+            GITHUB_TOKEN=$(grep -A10 "\"github\":" "$CONFIG_FILE" | grep "\"token\":" | head -1 | sed 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+            GITHUB_OWNER=$(grep -A10 "\"github\":" "$CONFIG_FILE" | grep "\"owner\":" | head -1 | sed 's/.*"owner"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+            GITHUB_REPO=$(grep -A20 "\"$app_name\":" "$CONFIG_FILE" | grep "\"repo\":" | head -1 | sed 's/.*"repo"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        fi
+    fi
+    
+    # Check if GitHub configuration exists
+    if [ -z "$GITHUB_TOKEN" ] || [ -z "$GITHUB_OWNER" ] || [ -z "$GITHUB_REPO" ]; then
+        echo "⚠️ GitHub configuration not found in config.json (token, owner, or repo missing)"
+        return 1
+    fi
+    
+    # Get current commit SHA
+    local project_dir="${SCRIPT_DIR}/workspace/${app_name}"
+    if [ -d "$project_dir/.git" ]; then
+        cd "$project_dir"
+        local commit_sha=$(git rev-parse HEAD)
+        cd -
+    else
+        echo "⚠️ Git repository not found for $app_name"
+        return 1
+    fi
+    
+    # Set default target URL if not provided
+    if [ -z "$target_url" ]; then
+        target_url="https://github.com/$GITHUB_OWNER/$GITHUB_REPO/commit/$commit_sha"
+    fi
+    
+    # Prepare JSON payload
+    local json_payload=$(cat <<EOF
+{
+    "state": "$status",
+    "target_url": "$target_url",
+    "description": "$description",
+    "context": "ci/cd-deployer"
+}
+EOF
+)
+    
+    # Send status to GitHub
+    echo "📡 Sending GitHub commit status..."
+    local response=$(curl -s -L \
+        -X POST \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer $GITHUB_TOKEN" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/statuses/$commit_sha" \
+        -d "$json_payload")
+    
+    if [ $? -eq 0 ]; then
+        echo "✅ GitHub commit status sent successfully"
+        echo "   Commit: $commit_sha"
+        echo "   Status: $status"
+        echo "   Repository: $GITHUB_OWNER/$GITHUB_REPO"
+        return 0
+    else
+        echo "❌ Failed to send GitHub commit status"
+        echo "Response: $response"
+        return 1
+    fi
+}
 
-# Pada bagian error handling (tambahkan di tempat yang sesuai)
-if [ $? -ne 0 ]; then
-    echo "❌ Deployment failed"
-    send_telegram_notification "$APP_NAME" "$NEW_VERSION" "error" "Deployment failed. Please check the logs for more information."
+# Pada bagian error handling (update existing error handling)
+# Ganti bagian error handling yang ada dengan ini:
+handle_deployment_error() {
+    local app_name=$1
+    local version=$2
+    local error_message=$3
+    
+    echo "❌ Deployment failed: $error_message"
+    
+    # Send failure status to GitHub
+    send_github_status "$app_name" "failure" "Deployment failed: $error_message" ""
+    
+    # Send error notification to Telegram
+    send_telegram_notification "$app_name" "$version" "error" "Deployment failed: $error_message"
+    
     exit 1
-fi
+}
