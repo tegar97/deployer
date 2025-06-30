@@ -386,19 +386,16 @@ OLD_VERSION=$ACTIVE_VERSION
 echo "Active version for ${APP_NAME}: $ACTIVE_VERSION"
 echo "Deploying new version for ${APP_NAME}: $NEW_VERSION"
 
-# Send pending status to GitHub
-send_github_status "$APP_NAME" "pending" "Deployment is in progress..." ""
-
-# Git pull to get latest code
-echo "📥 Pulling latest code from repository for ${APP_NAME}..."
-
-# Git pull to get latest code
+# Git pull to get latest code BEFORE sending status
 echo "📥 Pulling latest code from repository for ${APP_NAME}..."
 SCRIPT_PATH=$(dirname "$0")
 PROJECT_DIR="${SCRIPT_PATH}/workspace/${APP_NAME}"
 cd "$PROJECT_DIR"
 git pull
 cd -
+
+# Send pending status to GitHub (after git pull to get correct commit SHA)
+send_github_status "$APP_NAME" "pending" "Deployment is in progress..." ""
 
 # Function to verify deployment is using new image
 verify_deployment_image() {
