@@ -6,7 +6,7 @@ send_telegram_notification() {
     local version=$2
     local status=$3
     local message=$4
-    
+
     # Get Telegram configuration from config.json
     if [ -f "$CONFIG_FILE" ]; then
         if command -v jq &> /dev/null; then
@@ -18,28 +18,28 @@ send_telegram_notification() {
             TELEGRAM_CHAT_ID=$(grep -A5 "\"telegram\":" "$CONFIG_FILE" | grep "\"chatId\":" | head -1 | sed 's/.*"chatId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
         fi
     fi
-    
+
     # Check if Telegram configuration exists
     if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
         echo "⚠️ Telegram configuration not found in config.json"
         return 1
     fi
-    
+
     # Prepare message
     local emoji="✅"
     if [ "$status" = "error" ]; then
         emoji="❌"
     fi
-    
+
     local full_message="*Deployment Status* $emoji\n\n*App:* \`$app_name\`\n*Version:* \`$version\`\n*Status:* \`$status\`\n\n$message"
-    
+
     # Send notification
     echo "📱 Sending Telegram notification..."
     curl -s -X POST \
         -H "Content-Type: application/json" \
         -d "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"$full_message\",\"parse_mode\":\"Markdown\"}" \
         "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"
-    
+
     if [ $? -eq 0 ]; then
         echo "✅ Telegram notification sent successfully"
         return 0
@@ -55,7 +55,7 @@ send_github_status() {
     local status=$2
     local description=$3
     local target_url=$4
-    
+
     # Get GitHub configuration from config.json
     if [ -f "$CONFIG_FILE" ]; then
         if command -v jq &> /dev/null; then
@@ -69,13 +69,13 @@ send_github_status() {
             GITHUB_REPO=$(grep -A20 "\"$app_name\":" "$CONFIG_FILE" | grep "\"repo\":" | head -1 | sed 's/.*"repo"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
         fi
     fi
-    
+
     # Check if GitHub configuration exists
     if [ -z "$GITHUB_TOKEN" ] || [ -z "$GITHUB_OWNER" ] || [ -z "$GITHUB_REPO" ]; then
         echo "⚠️ GitHub configuration not found in config.json (token, owner, or repo missing)"
         return 1
     fi
-    
+
     # Get current commit SHA
     local project_dir="${SCRIPT_DIR}/workspace/${app_name}"
     if [ -d "$project_dir/.git" ]; then
@@ -86,12 +86,12 @@ send_github_status() {
         echo "⚠️ Git repository not found for $app_name"
         return 1
     fi
-    
+
     # Set default target URL if not provided
     if [ -z "$target_url" ]; then
         target_url="https://github.com/$GITHUB_OWNER/$GITHUB_REPO/commit/$commit_sha"
     fi
-    
+
     # Prepare JSON payload
     local json_payload=$(cat <<EOF
 {
@@ -102,7 +102,7 @@ send_github_status() {
 }
 EOF
 )
-    
+
     # Send status to GitHub
     echo "📡 Sending GitHub commit status..."
     local response=$(curl -s -L \
@@ -112,7 +112,7 @@ EOF
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/statuses/$commit_sha" \
         -d "$json_payload")
-    
+
     if [ $? -eq 0 ]; then
         echo "✅ GitHub commit status sent successfully"
         echo "   Commit: $commit_sha"
@@ -131,15 +131,15 @@ handle_deployment_error() {
     local app_name=$1
     local version=$2
     local error_message=$3
-    
+
     echo "❌ Deployment failed: $error_message"
-    
+
     # Send failure status to GitHub
     send_github_status "$app_name" "failure" "Deployment failed: $error_message" ""
-    
+
     # Send error notification to Telegram
     send_telegram_notification "$app_name" "$version" "error" "Deployment failed: $error_message"
-    
+
     exit 1
 }
 
@@ -147,17 +147,17 @@ handle_deployment_error() {
 ensure_configmap() {
     local app_name=$1
     local env_file="/var/www/env/${app_name}.env"
-    
+
     if [ -f "$env_file" ]; then
         echo "📝 Ensuring ConfigMap exists and is updated..."
         $KUBECTL_CMD create configmap ${app_name}-env --from-env-file="$env_file" --dry-run=client -o yaml | $KUBECTL_CMD apply -f -
-        
+
         # Verify ConfigMap was created
         if ! $KUBECTL_CMD get configmap ${app_name}-env &> /dev/null; then
             echo "❌ Failed to create ConfigMap ${app_name}-env"
             return 1
         fi
-        
+
         echo "✅ ConfigMap ${app_name}-env created/updated successfully"
         return 0
     else
@@ -193,14 +193,14 @@ extract_config_value() {
     local key="$2"
     local default_value="$3"
     local config_file="$4"
-    
+
     # Try to extract app-specific value
     local app_value=$(grep -A20 "\"$app_name\":" "$config_file" | grep "\"$key\":" | head -1 | sed 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/')
-    
+
     # If app-specific value not found, try to get default value
     if [ -z "$app_value" ]; then
         local default_value_from_file=$(grep -A10 "\"defaults\":" "$config_file" | grep "\"$key\":" | head -1 | sed 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/')
-        
+
         # If default value from file not found, use provided default value
         if [ -z "$default_value_from_file" ]; then
             echo "$default_value"
@@ -217,20 +217,22 @@ CONFIG_FILE="$SCRIPT_DIR/config.json"
 # Load configuration from config.json
 if [ -f "$CONFIG_FILE" ]; then
     echo "📋 Loading configuration from config.json..."
-    
+
     # Check if jq is available
     if command -v jq &> /dev/null; then
         # Try to get app-specific configuration
         TARGET_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" "$CONFIG_FILE")
         NODE_PORT=$(jq -r ".apps.\"$APP_NAME\".nodePort // .defaults.nodePort" "$CONFIG_FILE")
         DOCKER_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" "$CONFIG_FILE")
+        SERVICE_PORT=$(jq -r ".apps.\"$APP_NAME\".servicePort // .defaults.servicePort" "$CONFIG_FILE")
         DOMAIN=$(jq -r ".apps.\"$APP_NAME\".domain // .defaults.domain" "$CONFIG_FILE")
     else
         echo "⚠️ jq command not found. Using grep/sed fallback to parse config.json."
         TARGET_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "$CONFIG_FILE")
         NODE_PORT=$(extract_config_value "$APP_NAME" "nodePort" "30000" "$CONFIG_FILE")
         DOCKER_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "$CONFIG_FILE")
-        
+        SERVICE_PORT=$(extract_config_value "$APP_NAME" "servicePort" "80" "$CONFIG_FILE")
+
         # Check if we failed to parse correctly
         # if [ -z "$TARGET_PORT" ] || [ "$TARGET_PORT" = "3000" ]; then
         #     echo "⚠️ Fallback parsing may have failed, calculating hash-based ports as backup."
@@ -247,9 +249,10 @@ else
     TARGET_PORT=$((3000 + APP_HASH % 1000))
     NODE_PORT=$((30000 + APP_HASH % 1000))
     DOCKER_PORT=$TARGET_PORT
+    SERVICE_PORT=80
 fi
 
-echo "🔌 Using ports: TARGET_PORT=$TARGET_PORT, NODE_PORT=$NODE_PORT, DOCKER_PORT=$DOCKER_PORT"
+echo "🔌 Using ports: TARGET_PORT=$TARGET_PORT, NODE_PORT=$NODE_PORT, DOCKER_PORT=$DOCKER_PORT, SERVICE_PORT=$SERVICE_PORT"
 
 # Check if user has MicroK8s permissions, if not try with sudo
 KUBECTL_CMD="sudo microk8s kubectl"
@@ -258,7 +261,7 @@ TLS_SECRET_NAME="$APP_NAME-tls"
 if ! $KUBECTL_CMD get nodes &> /dev/null; then
     echo "⚠️ Insufficient permissions for MicroK8s. Trying with sudo..."
     KUBECTL_CMD="sudo microk8s kubectl"
-    
+
     # Check if sudo works
     if ! $KUBECTL_CMD get nodes &> /dev/null; then
         echo "❌ Error: Cannot access MicroK8s even with sudo."
@@ -276,7 +279,7 @@ if [ "$SERVICE_EXISTS" -eq 0 ]; then
     # script path
     SCRIPT_PATH=$(dirname "$0")
     echo "🔄 Service ${APP_NAME}-service belum ada, melakukan setup awal..."
-    
+
     # Git pull to get latest code
     echo "📥 Pulling latest code from repository for ${APP_NAME}..."
     SCRIPT_PATH=$(dirname "$0")
@@ -284,37 +287,38 @@ if [ "$SERVICE_EXISTS" -eq 0 ]; then
     cd "$PROJECT_DIR"
     git pull
     cd -
-    
+
     # Build and import the initial images
     echo "🔨 Building Docker images for initial setup..."
     docker build -t ${APP_NAME}:blue "$PROJECT_DIR"
     docker build -t ${APP_NAME}:green "$PROJECT_DIR"
-    
+
     echo "Importing images into MicroK8s registry..."
     docker save ${APP_NAME}:blue | sudo microk8s ctr image import -
     docker save ${APP_NAME}:green | sudo microk8s ctr image import -
-    
+
     # Ensure ConfigMap exists before any deployment
     ensure_configmap "$APP_NAME"
-    
+
     echo "📦 Deploying initial blue version for ${APP_NAME}..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
         -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
         "${SCRIPT_PATH}/manifests/deployment-blue.template.yaml" | $KUBECTL_CMD apply -f - 
-        
+
     echo "📦 Deploying initial green version for ${APP_NAME}..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
         -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
         "${SCRIPT_PATH}/manifests/deployment-green.template.yaml" | $KUBECTL_CMD apply -f -
-        
+
     echo "🔄 Creating service ${APP_NAME}-service..."
     sed -e "s/__APP_NAME__/${APP_NAME}/g" \
         -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
         -e "s/__NODE_PORT__/${NODE_PORT}/g" \
+        -e "s/__SERVICE_PORT__/${SERVICE_PORT}/g" \
         "${SCRIPT_PATH}/manifests/service.template.yaml" | $KUBECTL_CMD apply -f -
-   
+
     echo "🎯 Setting initial active version to blue for ${APP_NAME}-service..."
     $KUBECTL_CMD patch service ${APP_NAME}-service -p \
         "{\"spec\": {\"selector\": {\"app\": \"${APP_NAME}\", \"version\": \"blue\"}}}"
@@ -324,7 +328,7 @@ if [ "$SERVICE_EXISTS" -eq 0 ]; then
     if [ -f "$ENV_FILE" ]; then
         echo "📝 Creating ConfigMap from .env file..."
         $KUBECTL_CMD create configmap ${APP_NAME}-env --from-env-file="$ENV_FILE" --dry-run=client -o yaml | $KUBECTL_CMD apply -f -
-        
+
         # Update deployments to use the ConfigMap
         echo "🔄 Updating deployments to use ConfigMap..."
         $KUBECTL_CMD  set env deployment/${APP_NAME}-blue --from=configmap/${APP_NAME}-env
@@ -365,10 +369,11 @@ EOF
     sed -e "s/__APP_NAME__/$APP_NAME/g" \
         -e "s/__DOMAIN__/$DOMAIN/g" \
         -e "s/__TLS_SECRET__/$TLS_SECRET_NAME/g" \
+        -e "s/__SERVICE_PORT__/$SERVICE_PORT/g" \
         "$SCRIPT_DIR/manifests/ingress.template.yaml" | $KUBECTL_CMD apply -f -
-    
+
     echo "✅ Initial setup complete for ${APP_NAME}"
-    
+
     # Since we've already done the git pull and setup, skip the rest of the deployment
     exit 0
 fi
@@ -402,38 +407,38 @@ verify_deployment_image() {
     local app_name=$1
     local version=$2
     local expected_image="${app_name}:${version}"
-    
+
     echo "🔍 Verifying deployment is using correct image..."
-    
+
     # Get the current image
     local current_image=$($KUBECTL_CMD get deployment ${app_name}-${version} -o jsonpath="{.spec.template.spec.containers[0].image}")
-    
+
     if [ "$current_image" != "$expected_image" ]; then
         echo "❌ Deployment is not using the correct image"
         echo "Expected: $expected_image"
         echo "Current: $current_image"
         return 1
     fi
-    
+
     # Force pull new image
     echo "🔄 Forcing image pull..."
     $KUBECTL_CMD set image deployment/${app_name}-${version} ${app_name}=${expected_image} --record
-    
+
     # Wait for rollout to complete
     echo "⏱️ Waiting for rollout to complete..."
     $KUBECTL_CMD rollout status deployment/${app_name}-${version} --timeout=300s
-    
+
     # Verify pod is using new image
     local pod_name=$($KUBECTL_CMD get pod -l app=${app_name},version=${version} -o jsonpath="{.items[0].metadata.name}")
     local pod_image=$($KUBECTL_CMD get pod $pod_name -o jsonpath="{.spec.containers[0].image}")
-    
+
     if [ "$pod_image" != "$expected_image" ]; then
         echo "❌ Pod is not using the correct image"
         echo "Expected: $expected_image"
         echo "Current: $pod_image"
         return 1
     fi
-    
+
     echo "✅ Deployment verified using correct image"
     return 0
 }
@@ -464,13 +469,13 @@ verify_deployment_image "$APP_NAME" "$NEW_VERSION"
 # Check if deployment verification failed
 if [ $? -ne 0 ]; then
     echo "❌ Deployment verification failed"
-    
+
     # Send failure status to GitHub
     send_github_status "$APP_NAME" "failure" "Deployment verification failed - image not updated" ""
-    
+
     # Send error notification to Telegram
     send_telegram_notification "$APP_NAME" "$NEW_VERSION" "error" "Deployment verification failed - image not updated"
-    
+
     exit 1
 fi
 
@@ -489,13 +494,13 @@ if [ "$SERVICE_VERSION" != "$NEW_VERSION" ]; then
     echo "❌ Service is not pointing to the new version"
     echo "Expected: $NEW_VERSION"
     echo "Current: $SERVICE_VERSION"
-    
+
     # Send failure status to GitHub
     send_github_status "$APP_NAME" "failure" "Service failed to switch to new version" ""
-    
+
     # Send error notification to Telegram
     send_telegram_notification "$APP_NAME" "$NEW_VERSION" "error" "Service failed to switch to new version"
-    
+
     exit 1
 fi
 

@@ -9,6 +9,6 @@ spec:
     version: blue 
   ports:
     - protocol: TCP
-      port: 80
+      port: __SERVICE_PORT__
       targetPort: __DOCKER_PORT__
-      nodePort: __NODE_PORT__ 
+      nodePort: __NODE_PORT__

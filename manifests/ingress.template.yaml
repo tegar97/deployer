@@ -5,6 +5,10 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
 spec:
   ingressClassName: public
   tls:
@@ -21,4 +25,4 @@ spec:
               service:
                 name: __APP_NAME__-service
                 port:
-                  number: 80
+                  number: __SERVICE_PORT__
