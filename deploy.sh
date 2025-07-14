@@ -166,6 +166,78 @@ ensure_configmap() {
     fi
 }
 
+# Function to check if HAProxy is needed
+check_haproxy_needed() {
+    local app_name=$1
+    local service_port=$2
+    local node_port=$3
+
+    # HAProxy is needed if servicePort is different from nodePort
+    # This allows users to access apps on custom ports while Kubernetes uses standard NodePorts
+    if [ "$service_port" != "$node_port" ] && [ "$service_port" != "null" ] && [ -n "$service_port" ]; then
+        echo "🔀 HAProxy redirection needed: $service_port -> $node_port"
+        return 0
+    else
+        echo "ℹ️ No HAProxy redirection needed for $app_name"
+        return 1
+    fi
+}
+
+# Function to install HAProxy if not present
+ensure_haproxy_installed() {
+    if ! command -v haproxy &> /dev/null; then
+        echo "🔧 HAProxy not found, installing..."
+
+        # Use the haproxy-setup.sh script to install
+        if [ -f "$SCRIPT_DIR/haproxy-setup.sh" ]; then
+            chmod +x "$SCRIPT_DIR/haproxy-setup.sh"
+            "$SCRIPT_DIR/haproxy-setup.sh" install
+        else
+            echo "❌ haproxy-setup.sh not found. Installing HAProxy manually..."
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get update && sudo apt-get install -y haproxy
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y haproxy
+            elif command -v dnf &> /dev/null; then
+                sudo dnf install -y haproxy
+            else
+                echo "❌ Cannot install HAProxy automatically"
+                return 1
+            fi
+            sudo systemctl enable haproxy
+        fi
+
+        echo "✅ HAProxy installation completed"
+    else
+        echo "✅ HAProxy is already installed"
+    fi
+
+    return 0
+}
+
+# Function to update HAProxy configuration
+update_haproxy_config() {
+    echo "🔄 Updating HAProxy configuration..."
+
+    # Use the haproxy-setup.sh script to generate and apply configuration
+    if [ -f "$SCRIPT_DIR/haproxy-setup.sh" ]; then
+        chmod +x "$SCRIPT_DIR/haproxy-setup.sh"
+        "$SCRIPT_DIR/haproxy-setup.sh" config
+
+        # Restart HAProxy to apply new configuration
+        if "$SCRIPT_DIR/haproxy-setup.sh" restart; then
+            echo "✅ HAProxy configuration updated and service restarted"
+            return 0
+        else
+            echo "❌ Failed to restart HAProxy"
+            return 1
+        fi
+    else
+        echo "❌ haproxy-setup.sh not found. Cannot update HAProxy configuration."
+        return 1
+    fi
+}
+
 # sudo mount --bind /var/www/lokasi-2 /var/www/aplikasi-1/workspace
 
 # Ambil REPO_NAME dari environment variable, default ke "myapp" jika tidak diset
@@ -372,6 +444,24 @@ EOF
         -e "s/__SERVICE_PORT__/$SERVICE_PORT/g" \
         "$SCRIPT_DIR/manifests/ingress.template.yaml" | $KUBECTL_CMD apply -f -
 
+    # Check if HAProxy is needed for port redirection
+    if check_haproxy_needed "$APP_NAME" "$SERVICE_PORT" "$NODE_PORT"; then
+        echo "🔧 Setting up HAProxy for port redirection..."
+
+        # Ensure HAProxy is installed
+        if ensure_haproxy_installed; then
+            # Update HAProxy configuration
+            update_haproxy_config
+
+            echo "✅ HAProxy setup completed"
+            echo "🔗 Port redirection active:"
+            echo "   - User can access app on port: $SERVICE_PORT"
+            echo "   - HAProxy redirects to Kubernetes NodePort: $NODE_PORT"
+        else
+            echo "⚠️ HAProxy setup failed, but deployment will continue"
+        fi
+    fi
+
     echo "✅ Initial setup complete for ${APP_NAME}"
 
     # Since we've already done the git pull and setup, skip the rest of the deployment
@@ -507,6 +597,26 @@ fi
 # Clean up old deployment
 echo "🧹 Cleaning up old deployment: ${APP_NAME}-${OLD_VERSION}..."
 $KUBECTL_CMD delete deployment ${APP_NAME}-${OLD_VERSION} --ignore-not-found
+
+# Update HAProxy configuration if needed
+if check_haproxy_needed "$APP_NAME" "$SERVICE_PORT" "$NODE_PORT"; then
+    echo "🔄 Updating HAProxy configuration for port redirection..."
+
+    # Ensure HAProxy is installed
+    if ensure_haproxy_installed; then
+        # Update HAProxy configuration
+        if update_haproxy_config; then
+            echo "✅ HAProxy configuration updated successfully"
+            echo "🔗 Port redirection active:"
+            echo "   - User can access app on port: $SERVICE_PORT"
+            echo "   - HAProxy redirects to Kubernetes NodePort: $NODE_PORT"
+        else
+            echo "⚠️ HAProxy configuration update failed, but deployment completed successfully"
+        fi
+    else
+        echo "⚠️ HAProxy installation failed, but deployment completed successfully"
+    fi
+fi
 
 echo "✅ Deployment complete for ${APP_NAME}. Now serving version ${NEW_VERSION}."
 
