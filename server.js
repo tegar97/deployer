@@ -110,6 +110,72 @@ function deployApp(appName) {
     });
 }
 
+function deployApp2(appName) {
+    return new Promise((resolve, reject) => {
+        const scriptPath = path.join(__dirname, 'deploy2.sh');
+
+        console.log(`📜 Deploying app (direct): ${appName}`);
+        
+        if (!fs.existsSync(scriptPath)) {
+            console.error('❌ Script tidak ditemukan:', scriptPath);
+            reject(new Error('Script deploy2 tidak ditemukan'));
+            return;
+        }
+        
+        const isWindows = process.platform === 'win32';
+        let command, args;
+        
+        if (isWindows) {
+            const wslPath = scriptPath
+                .replace(/^([A-Z]):/, '/mnt/$1')
+                .replace(/\\/g, '/')
+                .toLowerCase();
+            console.log('📜 WSL path:', wslPath);
+            command = 'wsl';
+            args = ['bash', wslPath];
+        } else {
+            command = 'bash';
+            args = [scriptPath];
+        }
+        
+        const child = spawn(command, args, {
+            env: {
+                ...process.env,
+                REPO_NAME: appName || '',
+            }
+        });
+
+        let output = '';
+        let errorOutput = '';
+
+        child.stdout.on('data', (data) => {
+            const dataStr = data.toString();
+            output += dataStr;
+            console.log(`📢 [${appName}] Output:`, dataStr);
+        });
+
+        child.stderr.on('data', (data) => {
+            const dataStr = data.toString();
+            errorOutput += dataStr;
+            console.error(`❌ [${appName}] Error:`, dataStr);
+        });
+
+        child.on('close', (code) => {
+            console.log(`✅ Script selesai untuk ${appName} dengan kode exit ${code}`);
+            if (code === 0) {
+                resolve({ appName, success: true, output });
+            } else {
+                reject(new Error(`Script failed with code ${code}: ${errorOutput}`));
+            }
+        });
+
+        child.on('error', (err) => {
+            console.error(`❌ Error saat menjalankan script untuk ${appName}: ${err}`);
+            reject(err);
+        });
+    });
+}
+
 // Load configuration
 function loadConfig() {
     try {
@@ -133,6 +199,11 @@ app.post('/webhook', (req, res) => {
     }
 
     const event = req.headers['x-github-event'];
+    // 💡 Abaikan event 'ping'
+    if (event === 'ping') {
+        console.log('📡 Ping event diterima, tidak melakukan deploy.');
+        return res.status(200).send('Ping event received');
+    }
     const payload = req.body;
     const ref = payload?.ref;
     // const branchName = ref.split('/').pop();
@@ -249,6 +320,50 @@ app.post('/init', async (req, res) => {
         res.status(500).json({ 
             success: false, 
             message: 'Failed to process init request', 
+            error: error.message 
+        });
+    }
+});
+
+// Init2 endpoint to deploy all apps from config.json (direct deployment without blue-green)
+app.post('/init2', async (req, res) => {
+    try {
+        const config = loadConfig();
+        const appNames = Object.keys(config.apps);
+        
+        if (appNames.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'No apps configured in config.json' 
+            });
+        }
+        
+        console.log(`📋 Found ${appNames.length} apps to deploy (direct): ${appNames.join(', ')}`);
+        
+        const results = [];
+        const errors = [];
+        
+        for (const appName of appNames) {
+            try {
+                const result = await deployApp2(appName);
+                results.push(result);
+            } catch (error) {
+                console.error(`Failed to deploy ${appName}:`, error);
+                errors.push({ appName, error: error.message });
+            }
+        }
+        
+        res.status(200).json({ 
+            success: true,
+            deployed: results.map(r => r.appName),
+            failed: errors.map(e => e.appName),
+            errors: errors
+        });
+    } catch (error) {
+        console.error('Error processing init2 request:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to process init2 request', 
             error: error.message 
         });
     }
