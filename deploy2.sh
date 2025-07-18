@@ -98,7 +98,7 @@ send_github_status() {
     "state": "$status",
     "target_url": "$target_url",
     "description": "$description",
-    "context": "ci/cd-deployer-direct"
+    "context": "ci/cd-deployer-docker"
 }
 EOF
 )
@@ -135,127 +135,45 @@ handle_deployment_error() {
     echo "❌ Deployment failed: $error_message"
 
     # Send failure status to GitHub
-    send_github_status "$app_name" "failure" "Direct deployment failed: $error_message" ""
+    send_github_status "$app_name" "failure" "Docker deployment failed: $error_message" ""
 
     # Send error notification to Telegram
-    send_telegram_notification "$app_name" "$version" "error" "Direct deployment failed: $error_message"
+    send_telegram_notification "$app_name" "$version" "error" "Docker deployment failed: $error_message"
 
     exit 1
 }
 
-# Function to ensure ConfigMap exists and is updated
-ensure_configmap() {
+# Function to stop existing container
+stop_existing_container() {
+    local app_name=$1
+    local container_name="${app_name}-container"
+
+    echo "🛑 Stopping existing container if running..."
+    if docker ps -q -f name=$container_name | grep -q .; then
+        echo "📦 Found running container: $container_name"
+        docker stop $container_name
+        docker rm $container_name
+        echo "✅ Container $container_name stopped and removed"
+    else
+        echo "ℹ️ No running container found for $container_name"
+    fi
+}
+
+# Function to prepare environment variables
+prepare_env_vars() {
     local app_name=$1
     local env_file="/var/www/env/${app_name}.env"
-
+    
+    ENV_ARGS=""
+    
     if [ -f "$env_file" ]; then
-        echo "📝 Ensuring ConfigMap exists and is updated..."
-        $KUBECTL_CMD create configmap ${app_name}-env --from-env-file="$env_file" --dry-run=client -o yaml | $KUBECTL_CMD apply -f -
-
-        # Verify ConfigMap was created
-        if ! $KUBECTL_CMD get configmap ${app_name}-env &> /dev/null; then
-            echo "❌ Failed to create ConfigMap ${app_name}-env"
-            return 1
-        fi
-
-        echo "✅ ConfigMap ${app_name}-env created/updated successfully"
-        return 0
+        echo "📝 Loading environment variables from $env_file"
+        ENV_ARGS="--env-file $env_file"
+        echo "✅ Environment file loaded"
     else
-        echo "⚠️ .env file not found at $env_file"
-        return 1
+        echo "⚠️ .env file not found at $env_file, continuing without environment variables"
     fi
 }
-
-# Function to check if HAProxy is needed
-check_haproxy_needed() {
-    local app_name=$1
-    local service_port=$2
-    local node_port=$3
-
-    # HAProxy is needed if servicePort is different from nodePort
-    # This allows users to access apps on custom ports while Kubernetes uses standard NodePorts
-    if [ "$service_port" != "$node_port" ] && [ "$service_port" != "null" ] && [ -n "$service_port" ]; then
-        echo "🔀 HAProxy redirection needed: $service_port -> $node_port"
-        return 0
-    else
-        echo "ℹ️ No HAProxy redirection needed for $app_name"
-        return 1
-    fi
-}
-
-# Function to install HAProxy if not present
-ensure_haproxy_installed() {
-    if ! command -v haproxy &> /dev/null; then
-        echo "🔧 HAProxy not found, installing..."
-
-        # Use the haproxy-setup.sh script to install
-        if [ -f "$SCRIPT_DIR/haproxy-setup.sh" ]; then
-            chmod +x "$SCRIPT_DIR/haproxy-setup.sh"
-            "$SCRIPT_DIR/haproxy-setup.sh" install
-        else
-            echo "❌ haproxy-setup.sh not found. Installing HAProxy manually..."
-            if command -v apt-get &> /dev/null; then
-                sudo apt-get update && sudo apt-get install -y haproxy
-            elif command -v yum &> /dev/null; then
-                sudo yum install -y haproxy
-            elif command -v dnf &> /dev/null; then
-                sudo dnf install -y haproxy
-            else
-                echo "❌ Cannot install HAProxy automatically"
-                return 1
-            fi
-            sudo systemctl enable haproxy
-        fi
-
-        echo "✅ HAProxy installation completed"
-    else
-        echo "✅ HAProxy is already installed"
-    fi
-
-    return 0
-}
-
-# Function to update HAProxy configuration
-update_haproxy_config() {
-    echo "🔄 Updating HAProxy configuration..."
-
-    # Use the haproxy-setup.sh script to generate and apply configuration
-    if [ -f "$SCRIPT_DIR/haproxy-setup.sh" ]; then
-        chmod +x "$SCRIPT_DIR/haproxy-setup.sh"
-        "$SCRIPT_DIR/haproxy-setup.sh" config
-
-        # Restart HAProxy to apply new configuration
-        if "$SCRIPT_DIR/haproxy-setup.sh" restart; then
-            echo "✅ HAProxy configuration updated and service restarted"
-            return 0
-        else
-            echo "❌ Failed to restart HAProxy"
-            return 1
-        fi
-    else
-        echo "❌ haproxy-setup.sh not found. Cannot update HAProxy configuration."
-        return 1
-    fi
-}
-
-# Ambil REPO_NAME dari environment variable, default ke "myapp" jika tidak diset
-APP_NAME=${REPO_NAME:-"myapp"}
-
-echo "🚀 Working with App: $APP_NAME (Direct Deployment)"
-
-# Check if jq is installed and install it if not found
-if ! command -v jq &> /dev/null; then
-    echo "⚙️ jq not found, attempting to install it..."
-    if command -v apt-get &> /dev/null; then
-        sudo apt-get update && sudo apt-get install -y jq
-    elif command -v yum &> /dev/null; then
-        sudo yum install -y jq
-    elif command -v apk &> /dev/null; then
-        sudo apk add --no-cache jq
-    else
-        echo "⚠️ Could not install jq automatically. Using fallback method for configuration."
-    fi
-fi
 
 # Function to extract config values without jq
 extract_config_value() {
@@ -282,8 +200,28 @@ extract_config_value() {
     fi
 }
 
+# Ambil REPO_NAME dari environment variable, default ke "myapp" jika tidak diset
+APP_NAME=${REPO_NAME:-"myapp"}
+
+echo "🚀 Working with App: $APP_NAME (Direct Docker Deployment)"
+
+# Check if jq is installed and install it if not found
+if ! command -v jq &> /dev/null; then
+    echo "⚙️ jq not found, attempting to install it..."
+    if command -v apt-get &> /dev/null; then
+        sudo apt-get update && sudo apt-get install -y jq
+    elif command -v yum &> /dev/null; then
+        sudo yum install -y jq
+    elif command -v apk &> /dev/null; then
+        sudo apk add --no-cache jq
+    else
+        echo "⚠️ Could not install jq automatically. Using fallback method for configuration."
+    fi
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
+
 # Load configuration from config.json
 if [ -f "$CONFIG_FILE" ]; then
     echo "📋 Loading configuration from config.json..."
@@ -291,201 +229,146 @@ if [ -f "$CONFIG_FILE" ]; then
     # Check if jq is available
     if command -v jq &> /dev/null; then
         # Try to get app-specific configuration
-        TARGET_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" "$CONFIG_FILE")
-        NODE_PORT=$(jq -r ".apps.\"$APP_NAME\".nodePort // .defaults.nodePort" "$CONFIG_FILE")
         DOCKER_PORT=$(jq -r ".apps.\"$APP_NAME\".dockerPort // .defaults.dockerPort" "$CONFIG_FILE")
-        SERVICE_PORT=$(jq -r ".apps.\"$APP_NAME\".servicePort // .defaults.servicePort" "$CONFIG_FILE")
+        HOST_PORT=$(jq -r ".apps.\"$APP_NAME\".hostPort // .apps.\"$APP_NAME\".servicePort // .defaults.servicePort // .defaults.hostPort" "$CONFIG_FILE")
         DOMAIN=$(jq -r ".apps.\"$APP_NAME\".domain // .defaults.domain" "$CONFIG_FILE")
     else
         echo "⚠️ jq command not found. Using grep/sed fallback to parse config.json."
-        TARGET_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "$CONFIG_FILE")
-        NODE_PORT=$(extract_config_value "$APP_NAME" "nodePort" "30000" "$CONFIG_FILE")
         DOCKER_PORT=$(extract_config_value "$APP_NAME" "dockerPort" "3000" "$CONFIG_FILE")
-        SERVICE_PORT=$(extract_config_value "$APP_NAME" "servicePort" "80" "$CONFIG_FILE")
+        HOST_PORT=$(extract_config_value "$APP_NAME" "hostPort" "80" "$CONFIG_FILE")
+        if [ -z "$HOST_PORT" ] || [ "$HOST_PORT" = "80" ]; then
+            HOST_PORT=$(extract_config_value "$APP_NAME" "servicePort" "80" "$CONFIG_FILE")
+        fi
     fi
 else
     echo "⚠️ config.json not found. Using port calculation based on app name."
     # Calculate port based on app name hash
     APP_HASH=$(echo -n "$APP_NAME" | md5sum | tr -d -c 0-9 | cut -c 1-4)
-    TARGET_PORT=$((3000 + APP_HASH % 1000))
-    NODE_PORT=$((30000 + APP_HASH % 1000))
-    DOCKER_PORT=$TARGET_PORT
-    SERVICE_PORT=80
+    DOCKER_PORT=$((3000 + APP_HASH % 1000))
+    HOST_PORT=$((8000 + APP_HASH % 1000))
 fi
 
-echo "🔌 Using ports: TARGET_PORT=$TARGET_PORT, NODE_PORT=$NODE_PORT, DOCKER_PORT=$DOCKER_PORT, SERVICE_PORT=$SERVICE_PORT"
+echo "🔌 Using ports: DOCKER_PORT=$DOCKER_PORT, HOST_PORT=$HOST_PORT"
 
-# Check if user has MicroK8s permissions, if not try with sudo
-KUBECTL_CMD="sudo microk8s kubectl"
-TLS_SECRET_NAME="$APP_NAME-tls"
-
-if ! $KUBECTL_CMD get nodes &> /dev/null; then
-    echo "⚠️ Insufficient permissions for MicroK8s. Trying with sudo..."
-    KUBECTL_CMD="sudo microk8s kubectl"
-
-    # Check if sudo works
-    if ! $KUBECTL_CMD get nodes &> /dev/null; then
-        echo "❌ Error: Cannot access MicroK8s even with sudo."
-        echo "Please run the following commands to fix permissions:"
-        echo "    sudo usermod -a -G microk8s $USER"
-        echo "    sudo chown -R $USER ~/.kube"
-        echo "After this, reload the user groups by running 'newgrp microk8s' or reboot."
-        exit 1
-    fi
+# Check if Docker is running
+if ! docker info &> /dev/null; then
+    echo "❌ Docker is not running or accessible"
+    handle_deployment_error "$APP_NAME" "latest" "Docker is not running or accessible"
 fi
 
 # Git pull to get latest code BEFORE sending status
 echo "📥 Pulling latest code from repository for ${APP_NAME}..."
 SCRIPT_PATH=$(dirname "$0")
 PROJECT_DIR="${SCRIPT_PATH}/workspace/${APP_NAME}"
+
+if [ ! -d "$PROJECT_DIR" ]; then
+    echo "❌ Project directory not found: $PROJECT_DIR"
+    handle_deployment_error "$APP_NAME" "latest" "Project directory not found: $PROJECT_DIR"
+fi
+
 cd "$PROJECT_DIR"
 git pull
+if [ $? -ne 0 ]; then
+    echo "❌ Git pull failed"
+    handle_deployment_error "$APP_NAME" "latest" "Git pull failed"
+fi
 cd -
 
 # Send pending status to GitHub (after git pull to get correct commit SHA)
-send_github_status "$APP_NAME" "pending" "Direct deployment is in progress..." ""
+send_github_status "$APP_NAME" "pending" "Docker deployment is in progress..." ""
 
-# Check if service exists for initial setup
-SERVICE_EXISTS=$($KUBECTL_CMD get service | grep ${APP_NAME}-service | wc -l)
-if [ "$SERVICE_EXISTS" -eq 0 ]; then
-    echo "🔄 Service ${APP_NAME}-service belum ada, melakukan setup awal..."
+# Prepare environment variables
+prepare_env_vars "$APP_NAME"
 
-    # Ensure ConfigMap exists before any deployment
-    ensure_configmap "$APP_NAME"
+# Stop existing container
+stop_existing_container "$APP_NAME"
 
-    echo "🌐 Creating service ${APP_NAME}-service..."
-    sed -e "s/__APP_NAME__/${APP_NAME}/g" \
-        -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
-        -e "s/__NODE_PORT__/${NODE_PORT}/g" \
-        -e "s/__SERVICE_PORT__/${SERVICE_PORT}/g" \
-        "${SCRIPT_PATH}/manifests/service.template.yaml" | $KUBECTL_CMD apply -f -
-
-    CERT_MANAGER_NS="cert-manager"
-    ISSUER_EXISTS=$($KUBECTL_CMD get clusterissuer letsencrypt-prod --ignore-not-found | wc -l)
-    if [ "$ISSUER_EXISTS" -eq 0 ]; then
-        echo "📜 Creating ClusterIssuer..."
-        $KUBECTL_CMD apply -f - <<EOF
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    email: your@email.com
-    server: https://acme-v02.api.letsencrypt.org/directory
-    privateKeySecretRef:
-      name: letsencrypt-prod
-    solvers:
-    - http01:
-        ingress:
-          class: public
-EOF
-    fi
-
-    echo "🌐 Creating Ingress..."
-    sed -e "s/__APP_NAME__/$APP_NAME/g" \
-        -e "s/__DOMAIN__/$DOMAIN/g" \
-        -e "s/__TLS_SECRET__/$TLS_SECRET_NAME/g" \
-        -e "s/__SERVICE_PORT__/$SERVICE_PORT/g" \
-        "$SCRIPT_DIR/manifests/ingress.template.yaml" | $KUBECTL_CMD apply -f -
-
-    # Check if HAProxy is needed for port redirection
-    if check_haproxy_needed "$APP_NAME" "$SERVICE_PORT" "$NODE_PORT"; then
-        echo "🔧 Setting up HAProxy for port redirection..."
-
-        # Ensure HAProxy is installed
-        if ensure_haproxy_installed; then
-            # Update HAProxy configuration
-            update_haproxy_config
-
-            echo "✅ HAProxy setup completed"
-            echo "🔗 Port redirection active:"
-            echo "   - User can access app on port: $SERVICE_PORT"
-            echo "   - HAProxy redirects to Kubernetes NodePort: $NODE_PORT"
-        else
-            echo "⚠️ HAProxy setup failed, but deployment will continue"
-        fi
-    fi
-fi
-
-# Build and import the new image
+# Build Docker image
 echo "🔨 Building Docker image for ${APP_NAME}..."
 docker build -t ${APP_NAME}:latest "$PROJECT_DIR"
 
-echo "📦 Importing image ${APP_NAME}:latest into MicroK8s registry..."
-docker save ${APP_NAME}:latest | sudo microk8s ctr image import -
-
-# Ensure ConfigMap exists before deployment
-ensure_configmap "$APP_NAME"
-
-# Deploy directly without blue-green switching
-echo "🚀 Deploying ${APP_NAME} directly (no blue-green)..."
-
-# Check if deployment exists
-DEPLOYMENT_EXISTS=$($KUBECTL_CMD get deployment ${APP_NAME} --ignore-not-found | wc -l)
-
-if [ "$DEPLOYMENT_EXISTS" -eq 0 ]; then
-    echo "📦 Creating new deployment ${APP_NAME}..."
-    # Create deployment using blue template but without version suffix
-    sed -e "s/__APP_NAME__/${APP_NAME}/g" \
-        -e "s/__TARGET_PORT__/${TARGET_PORT}/g" \
-        -e "s/__DOCKER_PORT__/${DOCKER_PORT}/g" \
-        -e "s/version: blue/version: latest/g" \
-        -e "s/${APP_NAME}-blue/${APP_NAME}/g" \
-        "${SCRIPT_PATH}/manifests/deployment-blue.template.yaml" | $KUBECTL_CMD apply -f -
-else
-    echo "🔄 Updating existing deployment ${APP_NAME}..."
-    # Update existing deployment
-    $KUBECTL_CMD set image deployment/${APP_NAME} ${APP_NAME}=${APP_NAME}:latest --record
+if [ $? -ne 0 ]; then
+    echo "❌ Docker build failed"
+    handle_deployment_error "$APP_NAME" "latest" "Docker build failed"
 fi
 
-# Wait for deployment to be ready
-echo "⏱️ Waiting for deployment to be ready..."
-$KUBECTL_CMD rollout status deployment/${APP_NAME} --timeout=300s
+# Run new container
+echo "🚀 Running new Docker container for ${APP_NAME}..."
+CONTAINER_NAME="${APP_NAME}-container"
+
+# Build docker run command
+DOCKER_RUN_CMD="docker run -d --name $CONTAINER_NAME --restart unless-stopped -p $HOST_PORT:$DOCKER_PORT"
+
+# Add environment variables if available
+if [ -n "$ENV_ARGS" ]; then
+    DOCKER_RUN_CMD="$DOCKER_RUN_CMD $ENV_ARGS"
+fi
+
+# Add image name
+DOCKER_RUN_CMD="$DOCKER_RUN_CMD ${APP_NAME}:latest"
+
+echo "📝 Running command: $DOCKER_RUN_CMD"
+
+# Execute docker run
+eval $DOCKER_RUN_CMD
 
 if [ $? -ne 0 ]; then
-    handle_deployment_error "$APP_NAME" "latest" "Deployment rollout failed"
+    echo "❌ Failed to start Docker container"
+    handle_deployment_error "$APP_NAME" "latest" "Failed to start Docker container"
 fi
 
-# Update service selector to point to the deployment (without version)
-echo "🔄 Updating service ${APP_NAME}-service to point to deployment..."
-$KUBECTL_CMD patch service ${APP_NAME}-service -p \
-  "{\"spec\": {\"selector\": {\"app\": \"${APP_NAME}\", \"version\": \"latest\"}}}"
+# Wait a moment for container to start
+echo "⏱️ Waiting for container to start..."
+sleep 5
 
-# Wait for service to be ready
-echo "⏱️ Waiting for service to be ready..."
-sleep 10
-
-# Verify service is working
-SERVICE_VERSION=$($KUBECTL_CMD get service ${APP_NAME}-service -o jsonpath="{.spec.selector.version}")
-if [ "$SERVICE_VERSION" != "latest" ]; then
-    handle_deployment_error "$APP_NAME" "latest" "Service is not pointing to the new deployment"
+# Check if container is running
+if ! docker ps -q -f name=$CONTAINER_NAME | grep -q .; then
+    echo "❌ Container failed to start or exited"
+    echo "📋 Container logs:"
+    docker logs $CONTAINER_NAME
+    handle_deployment_error "$APP_NAME" "latest" "Container failed to start or exited"
 fi
 
-# Update HAProxy configuration if needed
-if check_haproxy_needed "$APP_NAME" "$SERVICE_PORT" "$NODE_PORT"; then
-    echo "🔄 Updating HAProxy configuration for port redirection..."
+# Check container health
+echo "🔍 Checking container health..."
+CONTAINER_STATUS=$(docker inspect --format='{{.State.Status}}' $CONTAINER_NAME)
 
-    # Ensure HAProxy is installed
-    if ensure_haproxy_installed; then
-        # Update HAProxy configuration
-        if update_haproxy_config; then
-            echo "✅ HAProxy configuration updated successfully"
-            echo "🔗 Port redirection active:"
-            echo "   - User can access app on port: $SERVICE_PORT"
-            echo "   - HAProxy redirects to Kubernetes NodePort: $NODE_PORT"
-        else
-            echo "⚠️ HAProxy configuration update failed, but deployment completed successfully"
-        fi
+if [ "$CONTAINER_STATUS" != "running" ]; then
+    echo "❌ Container is not running. Status: $CONTAINER_STATUS"
+    echo "📋 Container logs:"
+    docker logs $CONTAINER_NAME
+    handle_deployment_error "$APP_NAME" "latest" "Container is not running. Status: $CONTAINER_STATUS"
+fi
+
+# Test if application is responding
+echo "🌐 Testing application response..."
+sleep 2
+
+# Try to test the application endpoint
+if command -v curl &> /dev/null; then
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$HOST_PORT/ || echo "000")
+    if [ "$HTTP_CODE" != "000" ]; then
+        echo "✅ Application is responding (HTTP $HTTP_CODE)"
     else
-        echo "⚠️ HAProxy installation failed, but deployment completed successfully"
+        echo "⚠️ Application might not be ready yet, but container is running"
     fi
+else
+    echo "⚠️ curl not available, skipping HTTP test"
 fi
 
-echo "✅ Direct deployment complete for ${APP_NAME}. Now serving latest version."
+# Clean up old images (keep last 3)
+echo "🧹 Cleaning up old Docker images..."
+docker images ${APP_NAME} --format "table {{.Repository}}:{{.Tag}}\t{{.CreatedAt}}" | tail -n +2 | head -n -3 | awk '{print $1}' | xargs -r docker rmi
+
+echo "✅ Direct Docker deployment complete for ${APP_NAME}"
+echo "🔗 Application accessible at:"
+echo "   - http://localhost:$HOST_PORT"
+if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "null" ]; then
+    echo "   - http://$DOMAIN:$HOST_PORT (if domain is configured)"
+fi
 
 # Send success status to GitHub
-send_github_status "$APP_NAME" "success" "Direct deployment completed successfully" ""
+send_github_status "$APP_NAME" "success" "Docker deployment completed successfully" ""
 
 # Send success notification
-send_telegram_notification "$APP_NAME" "latest" "success" "Direct deployment completed successfully. Service is now running latest version." 
+send_telegram_notification "$APP_NAME" "latest" "success" "Docker deployment completed successfully. Service is running on port $HOST_PORT." 
