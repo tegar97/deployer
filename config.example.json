@@ -1,0 +1,100 @@
+{
+    "apps": {
+        "example-app-go": {
+            "nodePort": 30080,
+            "dockerPort": 3001,
+            "servicePort": 3000,
+            "hostPort": 8080,
+            "repo": "example-app-go",
+            "repository": "https://github.com/tegar97/example-app-go.git",
+            "domain": "example.ruangkode.com",
+            "applicationName": "golang",
+            "env": {
+                "APP_PORT": "3000",
+                "STORAGE_BUCKET": "inventory-bucket"
+            }
+        },
+        "frontend-app": {
+            "nodePort": 30081,
+            "dockerPort": 3000,
+            "servicePort": 80,
+            "hostPort": 8081,
+            "repo": "frontend-app",
+            "repository": "https://github.com/username/frontend-app.git",
+            "domain": "frontend.example.com",
+            "applicationName": "frontend",
+            "env": {
+                "API_URL": "https://api.example.com",
+                "NODE_ENV": "production"
+            }
+        },
+        "backend-api": {
+            "nodePort": 30082,
+            "dockerPort": 8080,
+            "servicePort": 8080,
+            "hostPort": 8082,
+            "repo": "backend-api",
+            "repository": "https://github.com/username/backend-api.git",
+            "domain": "api.example.com",
+            "applicationName": "backend",
+            "env": {
+                "DATABASE_URL": "postgresql://localhost:5432/db",
+                "PORT": "8080"
+            }
+        }
+    },
+    "defaults": {
+        "targetPort": 3000,
+        "nodePort": 30000,
+        "dockerPort": 3000,
+        "servicePort": 80,
+        "hostPort": 8000
+    },
+    "server": {
+        "port": 9999,
+        "workspace_path": "/var/www",
+        "webhook_path": "/webhook"
+    },
+    "github": {
+        "token": "YOUR_GITHUB_TOKEN_HERE",
+        "owner": "YOUR_GITHUB_USERNAME",
+        "defaultRepo": ""
+    },
+    "telegram": {
+        "botToken": "YOUR_BOT_TOKEN_HERE",
+        "chatId": "YOUR_CHAT_ID_HERE"
+    },
+    "firebase": {
+        "projectId": "infra_1752895495_1616ab61",
+        "databaseURL": "https://fir-latihan-76d72-default-rtdb.asia-southeast1.firebasedatabase.app"
+    },
+    "states": {
+        "version": "1.0",
+        "project": "MicroserviceApp2",
+        "projectId": "infra_1752895495_1616ab61",
+        "configFile": "app-1.yml",
+        "status": "running",
+        "previewUrl": "https://your-preview-domain.com/infra_1752895495_1616ab61",
+        "lastUpdated": "2025-07-19T10:26:07+07:00",
+        "servers": {
+            "app-server-1": {
+                "host": "27.112.79.157",
+                "services": {
+                    "cicd_dependencies": {
+                        "deployed": true,
+                        "deployed_at": "2025-07-19T10:26:05.956990125+07:00",
+                        "status": "idle",
+                        "last_status_update": "2025-07-19T10:26:05.956990223+07:00"
+                    },
+                    "golang": {
+                        "deployed": false,
+                        "status": "idle",
+                        "last_status_update": "2025-07-19T10:26:07.331637921+07:00"
+                    }
+                },
+                "dependencies_set": true,
+                "last_seen": "2025-07-19T10:26:07.33163814+07:00"
+            }
+        }
+    }
+} 

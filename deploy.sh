@@ -1,5 +1,146 @@
 set -e
 
+# Function to send Firebase status update
+send_firebase_status() {
+    local app_name=$1
+    local status=$2
+    local deployed=$3
+    local start_time=$4
+    local end_time=$5
+
+    # Get Firebase configuration from config.json
+    if [ -f "$CONFIG_FILE" ]; then
+        if command -v jq &> /dev/null; then
+            FIREBASE_PROJECT_ID=$(jq -r ".firebase.projectId // empty" "$CONFIG_FILE")
+            FIREBASE_DATABASE_URL=$(jq -r ".firebase.databaseURL // empty" "$CONFIG_FILE")
+        else
+            # Fallback using grep/sed if jq is not available
+            FIREBASE_PROJECT_ID=$(grep -A5 "\"firebase\":" "$CONFIG_FILE" | grep "\"projectId\":" | head -1 | sed 's/.*"projectId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+            FIREBASE_DATABASE_URL=$(grep -A5 "\"firebase\":" "$CONFIG_FILE" | grep "\"databaseURL\":" | head -1 | sed 's/.*"databaseURL"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        fi
+    fi
+
+    # Check if Firebase configuration exists
+    if [ -z "$FIREBASE_PROJECT_ID" ] || [ -z "$FIREBASE_DATABASE_URL" ]; then
+        echo "⚠️ Firebase configuration not found in config.json"
+        return 1
+    fi
+
+    # Get project ID, server name, and application name from config.json
+    local project_id=""
+    local server_name=""
+    local application_name=""
+    
+    if command -v jq &> /dev/null; then
+        project_id=$(jq -r ".states.projectId // .firebase.projectId // empty" "$CONFIG_FILE")
+        server_name=$(jq -r ".states.servers | keys[0] // empty" "$CONFIG_FILE")
+        application_name=$(jq -r ".apps.\"$app_name\".applicationName // \"$app_name\"" "$CONFIG_FILE")
+    else
+        # Fallback using grep/sed if jq is not available
+        project_id=$(grep -A5 "\"states\":" "$CONFIG_FILE" | grep "\"projectId\":" | head -1 | sed 's/.*"projectId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        if [ -z "$project_id" ]; then
+            project_id=$(grep -A5 "\"firebase\":" "$CONFIG_FILE" | grep "\"projectId\":" | head -1 | sed 's/.*"projectId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        fi
+        server_name=$(grep -A10 "\"servers\":" "$CONFIG_FILE" | grep -o '"[^"]*"[[:space:]]*:' | head -1 | sed 's/"//g' | sed 's/://g')
+        application_name=$(grep -A20 "\"$app_name\":" "$CONFIG_FILE" | grep "\"applicationName\":" | head -1 | sed 's/.*"applicationName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        if [ -z "$application_name" ]; then
+            application_name="$app_name"
+        fi
+    fi
+    
+    # Use defaults if not found in config
+    if [ -z "$project_id" ]; then
+        project_id="deployer_$(date +%s)_$(echo -n "$app_name" | md5sum | cut -c1-8)"
+    fi
+    if [ -z "$server_name" ]; then
+        server_name="app-server-1"
+    fi
+    
+    # Get current timestamp
+    local current_time=$(date -Iseconds)
+    local timestamp_ms=$(date +%s%3N)
+    
+    # Calculate duration if both start and end times are provided
+    local duration=0
+    if [ -n "$start_time" ] && [ -n "$end_time" ]; then
+        local start_ms=$(date -d "$start_time" +%s%3N 2>/dev/null || echo "0")
+        local end_ms=$(date -d "$end_time" +%s%3N 2>/dev/null || echo "0")
+        if [ "$end_ms" -gt "$start_ms" ]; then
+            duration=$((end_ms - start_ms))
+        fi
+    fi
+
+    # Prepare Firebase update for current status
+    local status_payload=$(cat <<EOF
+{
+  "states/$project_id/servers/$server_name/services/$application_name": {
+    "deployed": $deployed,
+    "last_status_update": "$current_time",
+    "status": "$status"
+  },
+  "states/$project_id/servers/$server_name/last_seen": "$current_time",
+  "states/$project_id/last_updated": "$current_time"
+}
+EOF
+)
+
+    # Prepare Firebase update for status history
+    local history_key=$(date +%s%3N | sed 's/.*/-&/')
+    local history_payload=""
+    
+    if [ "$duration" -gt 0 ]; then
+        history_payload=$(cat <<EOF
+{
+  "status_history/$project_id/$server_name/$application_name/$history_key": {
+    "status": "$status",
+    "timestamp": "$(date -u -Iseconds | sed 's/+00:00/Z/')",
+    "duration": $duration
+  }
+}
+EOF
+)
+    else
+        history_payload=$(cat <<EOF
+{
+  "status_history/$project_id/$server_name/$application_name/$history_key": {
+    "status": "$status",
+    "timestamp": "$(date -u -Iseconds | sed 's/+00:00/Z/')"
+  }
+}
+EOF
+)
+    fi
+
+    # Send status update to Firebase
+    echo "🔥 Sending Firebase status update..."
+    local response1=$(curl -s -X PATCH \
+        -H "Content-Type: application/json" \
+        -d "$status_payload" \
+        "${FIREBASE_DATABASE_URL}/.json")
+
+    # Send history update to Firebase
+    local response2=$(curl -s -X PATCH \
+        -H "Content-Type: application/json" \
+        -d "$history_payload" \
+        "${FIREBASE_DATABASE_URL}/.json")
+
+    if [ $? -eq 0 ]; then
+        echo "✅ Firebase status sent successfully"
+        echo "   App: $app_name"
+        echo "   Status: $status"
+        echo "   Deployed: $deployed"
+        if [ "$duration" -gt 0 ]; then
+            echo "   Duration: ${duration}ms"
+        fi
+        return 0
+    else
+        echo "❌ Failed to send Firebase status"
+        echo "Response1: $response1"
+        echo "Response2: $response2"
+        return 1
+    fi
+}
+
 # Function to send Telegram notification
 send_telegram_notification() {
     local app_name=$1
@@ -133,6 +274,10 @@ handle_deployment_error() {
     local error_message=$3
 
     echo "❌ Deployment failed: $error_message"
+
+    # Record end time and send Firebase error status
+    END_TIME=$(date -Iseconds)
+    send_firebase_status "$app_name" "error" "false" "$START_TIME" "$END_TIME"
 
     # Send failure status to GitHub
     send_github_status "$app_name" "failure" "Deployment failed: $error_message" ""
@@ -481,6 +626,13 @@ OLD_VERSION=$ACTIVE_VERSION
 echo "Active version for ${APP_NAME}: $ACTIVE_VERSION"
 echo "Deploying new version for ${APP_NAME}: $NEW_VERSION"
 
+# Record deployment start time
+START_TIME=$(date -Iseconds)
+echo "🕐 Deployment started at: $START_TIME"
+
+# Send Firebase deploying status
+send_firebase_status "$APP_NAME" "deploying" "false" "$START_TIME" ""
+
 # Git pull to get latest code BEFORE sending status
 echo "📥 Pulling latest code from repository for ${APP_NAME}..."
 SCRIPT_PATH=$(dirname "$0")
@@ -538,6 +690,9 @@ echo "Applying deployment for ${APP_NAME}-${NEW_VERSION}..."
 
 # Ensure ConfigMap exists before deployment
 ensure_configmap "$APP_NAME"
+
+# Send Firebase building status
+send_firebase_status "$APP_NAME" "building" "false" "$START_TIME" ""
 
 # Build and import the new image
 echo "Building Docker image for ${APP_NAME} version $NEW_VERSION..."
@@ -619,6 +774,10 @@ if check_haproxy_needed "$APP_NAME" "$SERVICE_PORT" "$NODE_PORT"; then
 fi
 
 echo "✅ Deployment complete for ${APP_NAME}. Now serving version ${NEW_VERSION}."
+
+# Record end time and send Firebase success status
+END_TIME=$(date -Iseconds)
+send_firebase_status "$APP_NAME" "online" "true" "$START_TIME" "$END_TIME"
 
 # Send success status to GitHub
 send_github_status "$APP_NAME" "success" "Deployment completed successfully" ""
