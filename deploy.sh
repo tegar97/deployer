@@ -560,34 +560,34 @@ if [ "$SERVICE_EXISTS" -eq 0 ]; then
         echo "⚠️ .env file not found at $ENV_FILE"
     fi
 
-    CERT_MANAGER_NS="cert-manager"
-    ISSUER_EXISTS=$($KUBECTL_CMD get clusterissuer letsencrypt-prod --ignore-not-found | wc -l)
-    if [ "$ISSUER_EXISTS" -eq 0 ]; then
-        echo "📜 Creating ClusterIssuer..."
-        $KUBECTL_CMD apply -f - <<EOF
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    email: your@email.com
-    server: https://acme-v02.api.letsencrypt.org/directory
-    privateKeySecretRef:
-      name: letsencrypt-prod
-    solvers:
-    - http01:
-        ingress:
-          class: public
-EOF
-    fi
+#     CERT_MANAGER_NS="cert-manager"
+#     ISSUER_EXISTS=$($KUBECTL_CMD get clusterissuer letsencrypt-prod --ignore-not-found | wc -l)
+#     if [ "$ISSUER_EXISTS" -eq 0 ]; then
+#         echo "📜 Creating ClusterIssuer..."
+#         $KUBECTL_CMD apply -f - <<EOF
+# apiVersion: cert-manager.io/v1
+# kind: ClusterIssuer
+# metadata:
+#   name: letsencrypt-prod
+# spec:
+#   acme:
+#     email: your@email.com
+#     server: https://acme-v02.api.letsencrypt.org/directory
+#     privateKeySecretRef:
+#       name: letsencrypt-prod
+#     solvers:
+#     - http01:
+#         ingress:
+#           class: public
+# EOF
+#     fi
 
-    echo "🌐 Creating Ingress..."
-    sed -e "s/__APP_NAME__/$APP_NAME/g" \
-        -e "s/__DOMAIN__/$DOMAIN/g" \
-        -e "s/__TLS_SECRET__/$TLS_SECRET_NAME/g" \
-        -e "s/__SERVICE_PORT__/$SERVICE_PORT/g" \
-        "$SCRIPT_DIR/manifests/ingress.template.yaml" | $KUBECTL_CMD apply -f -
+    # echo "🌐 Creating Ingress..."
+    # sed -e "s/__APP_NAME__/$APP_NAME/g" \
+    #     -e "s/__DOMAIN__/$DOMAIN/g" \
+    #     -e "s/__TLS_SECRET__/$TLS_SECRET_NAME/g" \
+    #     -e "s/__SERVICE_PORT__/$SERVICE_PORT/g" \
+    #     "$SCRIPT_DIR/manifests/ingress.template.yaml" | $KUBECTL_CMD apply -f -
 
     # Check if HAProxy is needed for port redirection
     if check_haproxy_needed "$APP_NAME" "$SERVICE_PORT" "$NODE_PORT"; then

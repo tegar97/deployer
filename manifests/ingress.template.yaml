@@ -3,7 +3,7 @@ kind: Ingress
 metadata:
   name: __APP_NAME__-ingress
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/rewrite-target: /
     nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
     nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
@@ -11,10 +11,10 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
 spec:
   ingressClassName: public
-  tls:
-    - hosts:
-        - __DOMAIN__
-      secretName: __TLS_SECRET__
+  # tls:
+  #   - hosts:
+  #       - __DOMAIN__
+      # secretName: __TLS_SECRET__
   rules:
     - host: __DOMAIN__
       http:
