@@ -30,7 +30,7 @@ send_firebase_status() {
     local project_id=""
     local server_name=""
     local application_name=""
-    
+
     if command -v jq &> /dev/null; then
         project_id=$(jq -r ".states.projectId // .firebase.projectId // empty" "$CONFIG_FILE")
         server_name=$(jq -r ".states.servers | keys[0] // empty" "$CONFIG_FILE")
@@ -47,7 +47,7 @@ send_firebase_status() {
             application_name="$app_name"
         fi
     fi
-    
+
     # Use defaults if not found in config
     if [ -z "$project_id" ]; then
         project_id="deployer_$(date +%s)_$(echo -n "$app_name" | md5sum | cut -c1-8)"
@@ -55,11 +55,11 @@ send_firebase_status() {
     if [ -z "$server_name" ]; then
         server_name="app-server-1"
     fi
-    
+
     # Get current timestamp
     local current_time=$(date -Iseconds)
     local timestamp_ms=$(date +%s%3N)
-    
+
     # Calculate duration if both start and end times are provided
     local duration=0
     if [ -n "$start_time" ] && [ -n "$end_time" ]; then
@@ -87,7 +87,7 @@ EOF
     # Prepare Firebase update for status history
     local history_key=$(date +%s%3N | sed 's/.*/-&/')
     local history_payload=""
-    
+
     if [ "$duration" -gt 0 ]; then
         history_payload=$(cat <<EOF
 {
@@ -147,6 +147,8 @@ send_telegram_notification() {
     local version=$2
     local status=$3
     local message=$4
+    local start_time=$5
+    local end_time=$6
 
     # Get Telegram configuration from config.json
     if [ -f "$CONFIG_FILE" ]; then
@@ -172,7 +174,25 @@ send_telegram_notification() {
         emoji="❌"
     fi
 
-    local full_message="*Deployment Status* $emoji\n\n*App:* \`$app_name\`\n*Version:* \`$version\`\n*Status:* \`$status\`\n\n$message"
+    # Calculate execution time in mm:ss format if both start and end times are provided
+    local execution_time=""
+    if [ -n "$start_time" ] && [ -n "$end_time" ]; then
+        local start_seconds=$(date -d "$start_time" +%s)
+        local end_seconds=$(date -d "$end_time" +%s)
+        local total_seconds=$((end_seconds - start_seconds))
+        local minutes=$((total_seconds / 60))
+        local seconds=$((total_seconds % 60))
+        execution_time=$(printf "%02d:%02d" $minutes $seconds)
+    fi
+
+    local full_message="*Deployment Status* $emoji\n\n*App:* \`$app_name\`\n*Version:* \`$version\`\n*Status:* \`$status\`"
+
+    # Add execution time to message if available
+    if [ -n "$execution_time" ]; then
+        full_message="$full_message\n*Execution Time:* \`$execution_time\`"
+    fi
+
+    full_message="$full_message\n\n$message"
 
     # Send notification
     echo "📱 Sending Telegram notification..."
@@ -283,7 +303,7 @@ handle_deployment_error() {
     send_github_status "$app_name" "failure" "Deployment failed: $error_message" ""
 
     # Send error notification to Telegram
-    send_telegram_notification "$app_name" "$version" "error" "Deployment failed: $error_message"
+    send_telegram_notification "$app_name" "$version" "error" "Deployment failed: $error_message" "$START_TIME" "$END_TIME"
 
     exit 1
 }
@@ -715,11 +735,14 @@ verify_deployment_image "$APP_NAME" "$NEW_VERSION"
 if [ $? -ne 0 ]; then
     echo "❌ Deployment verification failed"
 
+    # Record end time for error case
+    END_TIME=$(date -Iseconds)
+
     # Send failure status to GitHub
     send_github_status "$APP_NAME" "failure" "Deployment verification failed - image not updated" ""
 
     # Send error notification to Telegram
-    send_telegram_notification "$APP_NAME" "$NEW_VERSION" "error" "Deployment verification failed - image not updated"
+    send_telegram_notification "$APP_NAME" "$NEW_VERSION" "error" "Deployment verification failed - image not updated" "$START_TIME" "$END_TIME"
 
     exit 1
 fi
@@ -740,11 +763,14 @@ if [ "$SERVICE_VERSION" != "$NEW_VERSION" ]; then
     echo "Expected: $NEW_VERSION"
     echo "Current: $SERVICE_VERSION"
 
+    # Record end time for error case
+    END_TIME=$(date -Iseconds)
+
     # Send failure status to GitHub
     send_github_status "$APP_NAME" "failure" "Service failed to switch to new version" ""
 
     # Send error notification to Telegram
-    send_telegram_notification "$APP_NAME" "$NEW_VERSION" "error" "Service failed to switch to new version"
+    send_telegram_notification "$APP_NAME" "$NEW_VERSION" "error" "Service failed to switch to new version" "$START_TIME" "$END_TIME"
 
     exit 1
 fi
@@ -783,4 +809,4 @@ send_firebase_status "$APP_NAME" "online" "true" "$START_TIME" "$END_TIME"
 send_github_status "$APP_NAME" "success" "Deployment completed successfully" ""
 
 # Send success notification
-send_telegram_notification "$APP_NAME" "$NEW_VERSION" "success" "Deployment completed successfully. Service is now running version $NEW_VERSION."
+send_telegram_notification "$APP_NAME" "$NEW_VERSION" "success" "Deployment completed successfully. Service is now running version $NEW_VERSION." "$START_TIME" "$END_TIME"
